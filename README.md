@@ -1,0 +1,1 @@
+# Basta de perder tiempo entrando a ARCA (exAFIP) para consultar los padrones o facturar
