@@ -1,59 +1,52 @@
-/* eslint-env node */
+/**
+ * wsaa.js
+ * Genera y cachea (en memoria) el token y sign de AFIP WSAA.
+ * Compatible con Google Cloud Functions (Node.js 22 + ESM).
+ */
+
 import forge from "node-forge";
 import axios from "axios";
+import { parseStringPromise } from "xml2js";
 
-// === CONFIG ===
-const DEFAULT_WSAA =
+// ======================================================
+// === CONFIG GLOBAL ===
+const SERVICE = "ws_sr_padron_a4";
+const WSAA_URL =
   process.env.MODE === "PROD"
     ? "https://wsaa.afip.gov.ar/ws/services/LoginCms"
     : "https://wsaahomo.afip.gov.ar/ws/services/LoginCms";
-const DEFAULT_SERVICE = "ws_sr_padron_a4";
 
-// === CACHE LOCAL DE TOKEN ===
-let cachedToken = null;
-let cachedSign = null;
-let cachedExpiry = null;
-
-// === FUNCIÓN AUXILIAR ===
-function parseExpiration(soapResponse) {
-  const m = soapResponse.match(/<expirationTime>([^<]+)<\/expirationTime>/);
-  return m ? new Date(m[1]) : null;
-}
+// ======================================================
+// === CACHÉ TEMPORAL EN MEMORIA ===
+let tokenCache = {
+  token: null,
+  sign: null,
+  expiration: null,
+};
 
 /**
- * Obtiene o renueva el token + sign desde WSAA (AFIP)
- * @param {string} service Nombre del servicio solicitado (ej: "ws_sr_padron_a4")
- * @param {Object} secrets { cert, key, cuit }
- * @returns {Promise<{token: string, sign: string}>}
+ * Verifica si el token actual sigue siendo válido.
+ * Devuelve true si el token existe y no venció.
  */
-export async function getTokenFromWSAA(
-  service = DEFAULT_SERVICE,
-  secrets = {}
-) {
-  // === 1️⃣ Validar cache ===
-  if (cachedToken && cachedExpiry && new Date() < cachedExpiry) {
-    console.log(
-      `[AFIP WSAA] Usando token cacheado válido hasta ${cachedExpiry.toISOString()}`
-    );
-    return { token: cachedToken, sign: cachedSign };
-  }
+function tokenValido() {
+  if (!tokenCache.token || !tokenCache.sign || !tokenCache.expiration)
+    return false;
+  const exp = new Date(tokenCache.expiration);
+  const ahora = new Date();
+  // Consideramos 2 minutos de margen antes del vencimiento
+  return exp > new Date(ahora.getTime() + 2 * 60 * 1000);
+}
 
-  // === 2️⃣ Validar secretos ===
-  const { cert, key, cuit } = secrets;
-  if (!cert || !key || !cuit) {
-    throw new Error("Faltan datos en secrets: cert, key o cuit");
-  }
-
-  const wsaaUrl = process.env.WSAA_URL || DEFAULT_WSAA;
-
-  // === 3️⃣ Armar TRA (Ticket de Requerimiento de Acceso) ===
+// ======================================================
+// === FUNCIÓN: Generar TRA ===
+function generarTRA(service = SERVICE) {
   const uniqueId = Math.floor(Date.now() / 1000);
   const generationTime = new Date(Date.now() - 10 * 60 * 1000).toISOString();
   const expirationTime = new Date(
     Date.now() + 12 * 60 * 60 * 1000
   ).toISOString();
 
-  const tra = `<?xml version="1.0" encoding="UTF-8"?>
+  return `<?xml version="1.0" encoding="UTF-8"?>
   <loginTicketRequest version="1.0">
     <header>
       <uniqueId>${uniqueId}</uniqueId>
@@ -62,81 +55,115 @@ export async function getTokenFromWSAA(
     </header>
     <service>${service}</service>
   </loginTicketRequest>`;
+}
 
-  // === 4️⃣ Firmar TRA con PKCS#7 ===
-  let cms;
-  try {
-    const p7 = forge.pkcs7.createSignedData();
-    p7.content = forge.util.createBuffer(tra, "utf8");
-    p7.addCertificate(forge.pki.certificateFromPem(cert));
-    p7.addSigner({
-      key: forge.pki.privateKeyFromPem(key),
-      certificate: forge.pki.certificateFromPem(cert),
-      digestAlgorithm: forge.pki.oids.sha256,
-      authenticatedAttributes: [
-        { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
-        { type: forge.pki.oids.messageDigest },
-        { type: forge.pki.oids.signingTime, value: new Date() },
-      ],
-    });
-    p7.sign();
-    const der = forge.asn1.toDer(p7.toAsn1()).getBytes();
-    cms = Buffer.from(der, "binary").toString("base64");
-  } catch (err) {
-    throw new Error("Error firmando TRA: " + err.message);
-  }
+// ======================================================
+// === FUNCIÓN: Firmar TRA en CMS con forge ===
+function firmarTRA(tra, certPem, keyPem) {
+  const p7 = forge.pkcs7.createSignedData();
+  p7.content = forge.util.createBuffer(tra, "utf8");
+  p7.addCertificate(forge.pki.certificateFromPem(certPem));
+  p7.addSigner({
+    key: forge.pki.privateKeyFromPem(keyPem),
+    certificate: forge.pki.certificateFromPem(certPem),
+    digestAlgorithm: forge.pki.oids.sha256,
+    authenticatedAttributes: [
+      { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
+      { type: forge.pki.oids.messageDigest },
+      { type: forge.pki.oids.signingTime, value: new Date() },
+    ],
+  });
+  p7.sign();
+  const der = forge.asn1.toDer(p7.toAsn1()).getBytes();
+  return Buffer.from(der, "binary").toString("base64");
+}
 
-  // === 5️⃣ Armar request SOAP ===
-  const soapRequest = `<?xml version="1.0" encoding="UTF-8"?>
+// ======================================================
+// === FUNCIÓN: Enviar a WSAA ===
+async function enviarWSAA(cmsBase64) {
+  const soapBody = `<?xml version="1.0" encoding="UTF-8"?>
   <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
                     xmlns:wsaa="http://wsaa.view.sua.dvadac.afip.gov.ar/">
     <soapenv:Header/>
     <soapenv:Body>
       <wsaa:loginCms>
-        <wsaa:in0>${cms}</wsaa:in0>
+        <wsaa:in0>${cmsBase64}</wsaa:in0>
       </wsaa:loginCms>
     </soapenv:Body>
   </soapenv:Envelope>`;
 
-  // === 6️⃣ Invocar WSAA ===
-  let data;
   try {
-    const response = await axios.post(wsaaUrl, soapRequest, {
+    const response = await axios.post(WSAA_URL, soapBody, {
       headers: { "Content-Type": "text/xml; charset=utf-8" },
-      timeout: 25000,
+      timeout: 20000,
     });
-    data = response.data;
-  } catch (err) {
-    throw new Error(`Error al invocar WSAA (${wsaaUrl}): ${err.message}`);
+    return response.data;
+  } catch (error) {
+    const msg = error.response
+      ? `HTTP ${error.response.status}: ${error.response.data}`
+      : error.message;
+    throw new Error("Error al enviar solicitud al WSAA: " + msg);
   }
+}
 
-  // === 7️⃣ Manejar errores SOAP ===
-  if (data.includes("<faultcode>")) {
-    const faultCode =
-      data.match(/<faultcode>([^<]+)<\/faultcode>/)?.[1] || "Desconocido";
-    const faultString =
-      data.match(/<faultstring>([^<]+)<\/faultstring>/)?.[1] ||
-      "Error desconocido";
-    throw new Error(`Error SOAP AFIP WSAA [${faultCode}]: ${faultString}`);
-  }
-
-  // === 8️⃣ Extraer token y sign ===
-  const token = data.match(/<token>([^<]+)<\/token>/)?.[1];
-  const sign = data.match(/<sign>([^<]+)<\/sign>/)?.[1];
-  const expiration = parseExpiration(data);
-
-  if (!token || !sign) {
-    console.error("Respuesta WSAA incompleta:\n", data.slice(0, 500));
-    throw new Error("No se obtuvo token/sign de WSAA");
-  }
-
-  // === 9️⃣ Cachear en memoria ===
-  cachedToken = token;
-  cachedSign = sign;
-  cachedExpiry = expiration || new Date(Date.now() + 11 * 60 * 60 * 1000);
-
-  console.log(
-    `[AFIP WSAA] Token obtenido correctamente. Válido hasta ${cachedExpiry.toISOString()}`
+// ======================================================
+// === FUNCIÓN: Extraer loginCmsReturn del XML ===
+function extraerLoginCmsReturn(wsaaResponseXml) {
+  const match = wsaaResponseXml.match(
+    /<loginCmsReturn>([^<]+)<\/loginCmsReturn>/
   );
-  return { token, sign };
+  if (!match)
+    throw new Error("No se encontró <loginCmsReturn> en respuesta WSAA");
+  return match[1]
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"');
+}
+
+// ======================================================
+// === FUNCIÓN PRINCIPAL: getTokenFromWSAA ===
+export async function getTokenFromWSAA(service = SERVICE, _unusedSecrets = {}) {
+  // ✅ Reusar si el token en memoria aún es válido
+  if (tokenValido()) {
+    console.log("♻️ [WSAA] Token en memoria válido, reutilizando");
+    return tokenCache;
+  }
+
+  const cert = process.env.AFIP_CERT;
+  const key = process.env.AFIP_KEY;
+  const cuit = process.env.AFIP_CUIT;
+
+  if (!cert || !key || !cuit) {
+    throw new Error("Faltan datos en secrets: cert, key o cuit");
+  }
+
+  console.log("🔑 [WSAA] Generando nuevo token...");
+  const tra = generarTRA(service);
+  const cms = firmarTRA(tra, cert, key);
+
+  const wsaaResponse = await enviarWSAA(cms);
+  const loginCmsReturnXml = extraerLoginCmsReturn(wsaaResponse);
+
+  // === Parsear loginCmsReturn ===
+  const parsed = await parseStringPromise(loginCmsReturnXml, {
+    explicitArray: false,
+  });
+  const credentials = parsed.loginTicketResponse?.credentials;
+  const header = parsed.loginTicketResponse?.header;
+
+  if (!credentials?.token || !credentials?.sign) {
+    throw new Error("No se pudieron extraer token/sign del WSAA");
+  }
+
+  const expiration = new Date(header.expirationTime);
+  console.log("⏱ Token válido hasta:", expiration.toISOString());
+
+  // Guardar en caché
+  tokenCache = {
+    token: credentials.token,
+    sign: credentials.sign,
+    expiration,
+  };
+
+  return tokenCache;
 }

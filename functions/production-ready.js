@@ -1,7 +1,7 @@
 /**
- * testWSAAValidate.js
- * Prueba de WSAA AFIP con logs completos y validación de token
- * Ejecutar: node testWSAAValidate.js
+ * production-ready.js
+ * Producción: WSAA AFIP con logs completos y validación de token
+ * Ejecutar: node production-ready.js
  */
 
 import fs from "fs";
@@ -13,9 +13,10 @@ import { parseStringPromise } from "xml2js";
 const CERT_PATH = "./certs/certificado.crt"; // tu certificado PEM
 const KEY_PATH = "./certs/clave.key"; // tu clave privada PEM
 const CUIT_OBJETIVO = "20253006219"; // CUIT del computador autorizado
-const WSAA_URL = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms";
+const WSAA_URL = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms"; // usar wsaa o wsaa producción según entorno
 const SERVICE = "ws_sr_padron_a4";
 
+// === GENERAR TRA ===
 async function generarTRA() {
   const uniqueId = Math.floor(Date.now() / 1000);
   const generationTime = new Date(Date.now() - 10 * 60 * 1000).toISOString();
@@ -36,6 +37,7 @@ async function generarTRA() {
   return { tra, uniqueId, generationTime, expirationTime };
 }
 
+// === FIRMAR CMS ===
 async function firmarCMS(tra, certPem, keyPem) {
   const p7 = forge.pkcs7.createSignedData();
   p7.content = forge.util.createBuffer(tra, "utf8");
@@ -55,6 +57,7 @@ async function firmarCMS(tra, certPem, keyPem) {
   return Buffer.from(der, "binary").toString("base64");
 }
 
+// === ENVIAR WSAA ===
 async function enviarWSAA(cms) {
   const soapBody = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
@@ -88,8 +91,8 @@ async function enviarWSAA(cms) {
   }
 }
 
+// === EXTRAER LOGINCMS RETURN ===
 function extraerTokenSign(wsaaResponseXml) {
-  // Extrae el contenido de <loginCmsReturn>
   const match = wsaaResponseXml.match(
     /<loginCmsReturn>([^<]+)<\/loginCmsReturn>/
   );
@@ -102,6 +105,7 @@ function extraerTokenSign(wsaaResponseXml) {
   return decoded;
 }
 
+// === VALIDAR TOKEN ===
 async function validarToken(loginCmsReturnXml) {
   const parsed = await parseStringPromise(loginCmsReturnXml, {
     explicitArray: false,
@@ -126,6 +130,7 @@ async function validarToken(loginCmsReturnXml) {
   return { token, sign, expiration };
 }
 
+// === MAIN ===
 async function main() {
   try {
     console.log("� Leyendo certificado y clave...");
@@ -138,7 +143,7 @@ async function main() {
     const cnField = cert.subject.getField("CN");
     const cn = cnField ? cnField.value : "";
 
-    // Extraer CUIT del SERIALNUMBER (con prefijo "CUIT ")
+    // === EXTRAER CUIT (ESTO FUNCIONA) ===
     let cuitExtraido = "";
     for (const attr of cert.subject.attributes) {
       if (
@@ -159,8 +164,8 @@ async function main() {
       .join(", ");
 
     console.log("\n� Certificado del firmante:");
-    console.log("  CN (Nombre común / alias):", cn);
-    console.log("  CUIT extraído del certificado:", cuitExtraido);
+    console.log("  CN (alias):", cn);
+    console.log("  CUIT extraído:", cuitExtraido);
     console.log("  Issuer:", issuer);
     console.log("  Fecha inicio:", cert.validity.notBefore.toISOString());
     console.log("  Fecha fin:", cert.validity.notAfter.toISOString());
@@ -208,7 +213,7 @@ async function main() {
 
     console.log("\n✅ Script finalizado. Token y SOAP listos para usar.");
   } catch (err) {
-    console.error("\n❌ Error en validación/test:", err.message || err);
+    console.error("\n❌ Error en producción:", err.message || err);
   }
 }
 

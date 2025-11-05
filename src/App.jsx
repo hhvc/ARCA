@@ -7,7 +7,7 @@ export default function App() {
     <div>
       <Navbar />
       <div className="container py-4">
-        <h3 className="mb-4 text-center">Panel de pruebas AFIP</h3>
+        <h3 className="mb-4 text-center">Panel de pruebas ARCA</h3>
         <div className="row g-4">
           <div className="col-md-6">
             <AuthTester />

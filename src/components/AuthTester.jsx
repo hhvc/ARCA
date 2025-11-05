@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { testAuth } from "../services/afipApi";
+import ResultViewer from "./ResultViewer";
 
 export default function AuthTester() {
   const [loading, setLoading] = useState(false);
@@ -10,7 +11,7 @@ export default function AuthTester() {
     setResult(null);
     try {
       const res = await testAuth();
-      setResult(res.data);
+      setResult(res);
     } catch (err) {
       setResult({ error: err.message });
     } finally {
@@ -31,11 +32,7 @@ export default function AuthTester() {
       >
         {loading ? "Probando..." : "Probar conexión"}
       </button>
-      {result && (
-        <pre className="bg-light mt-3 p-2 small rounded">
-          {JSON.stringify(result, null, 2)}
-        </pre>
-      )}
+      <ResultViewer result={result} />
     </div>
   );
 }

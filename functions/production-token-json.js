@@ -1,21 +1,24 @@
 /**
- * testWSAAValidate.js
- * Prueba de WSAA AFIP con logs completos y validación de token
- * Ejecutar: node testWSAAValidate.js
+ * production-token-json.js
+ * WSAA AFIP: Producción con persistencia JSON de token y sign
+ * Ejecutar: node production-token-json.js
  */
 
 import fs from "fs";
 import forge from "node-forge";
 import axios from "axios";
 import { parseStringPromise } from "xml2js";
+import path from "path";
 
 // === CONFIG ===
-const CERT_PATH = "./certs/certificado.crt"; // tu certificado PEM
-const KEY_PATH = "./certs/clave.key"; // tu clave privada PEM
-const CUIT_OBJETIVO = "20253006219"; // CUIT del computador autorizado
+const CERT_PATH = "./certs/certificado.crt";
+const KEY_PATH = "./certs/clave.key";
+const CUIT_OBJETIVO = "20253006219";
 const WSAA_URL = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms";
 const SERVICE = "ws_sr_padron_a4";
+const TOKEN_FILE = path.resolve("./wsaa-token.json");
 
+// === GENERAR TRA ===
 async function generarTRA() {
   const uniqueId = Math.floor(Date.now() / 1000);
   const generationTime = new Date(Date.now() - 10 * 60 * 1000).toISOString();
@@ -36,6 +39,7 @@ async function generarTRA() {
   return { tra, uniqueId, generationTime, expirationTime };
 }
 
+// === FIRMAR CMS ===
 async function firmarCMS(tra, certPem, keyPem) {
   const p7 = forge.pkcs7.createSignedData();
   p7.content = forge.util.createBuffer(tra, "utf8");
@@ -55,6 +59,7 @@ async function firmarCMS(tra, certPem, keyPem) {
   return Buffer.from(der, "binary").toString("base64");
 }
 
+// === ENVIAR WSAA ===
 async function enviarWSAA(cms) {
   const soapBody = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
@@ -88,20 +93,19 @@ async function enviarWSAA(cms) {
   }
 }
 
+// === EXTRAER LOGINCMS RETURN ===
 function extraerTokenSign(wsaaResponseXml) {
-  // Extrae el contenido de <loginCmsReturn>
   const match = wsaaResponseXml.match(
     /<loginCmsReturn>([^<]+)<\/loginCmsReturn>/
   );
   if (!match) return null;
-
-  const decoded = match[1]
+  return match[1]
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"');
-  return decoded;
 }
 
+// === VALIDAR TOKEN ===
 async function validarToken(loginCmsReturnXml) {
   const parsed = await parseStringPromise(loginCmsReturnXml, {
     explicitArray: false,
@@ -118,98 +122,97 @@ async function validarToken(loginCmsReturnXml) {
   const expiration = new Date(header.expirationTime);
 
   console.log("⏱ Token expiración:", expiration.toISOString());
-  if (expiration < new Date()) {
+  if (expiration < new Date())
     throw new Error("❌ Token recibido ya está vencido");
-  }
 
   console.log("✅ Token y sign OK, válidos hasta:", expiration.toISOString());
   return { token, sign, expiration };
 }
 
-async function main() {
+// === LEER / GUARDAR TOKEN ===
+function leerTokenPersistente() {
+  if (!fs.existsSync(TOKEN_FILE)) return null;
   try {
-    console.log("� Leyendo certificado y clave...");
-    const certPem = fs.readFileSync(CERT_PATH, "utf8");
-    const keyPem = fs.readFileSync(KEY_PATH, "utf8");
-
-    const cert = forge.pki.certificateFromPem(certPem);
-
-    // Extraer CN
-    const cnField = cert.subject.getField("CN");
-    const cn = cnField ? cnField.value : "";
-
-    // Extraer CUIT del SERIALNUMBER (con prefijo "CUIT ")
-    let cuitExtraido = "";
-    for (const attr of cert.subject.attributes) {
-      if (
-        (attr.shortName && attr.shortName.toUpperCase() === "SERIALNUMBER") ||
-        (attr.name && attr.name.toUpperCase() === "SERIALNUMBER")
-      ) {
-        const match = attr.value.match(/\d{11}/);
-        if (match) {
-          cuitExtraido = match[0];
-          break;
-        }
-      }
-    }
-
-    // Extraer Issuer legible
-    const issuer = cert.issuer.attributes
-      .map((a) => `${a.shortName || a.name}=${a.value}`)
-      .join(", ");
-
-    console.log("\n� Certificado del firmante:");
-    console.log("  CN (Nombre común / alias):", cn);
-    console.log("  CUIT extraído del certificado:", cuitExtraido);
-    console.log("  Issuer:", issuer);
-    console.log("  Fecha inicio:", cert.validity.notBefore.toISOString());
-    console.log("  Fecha fin:", cert.validity.notAfter.toISOString());
-
-    if (cuitExtraido !== CUIT_OBJETIVO) {
-      throw new Error(
-        `⚠️ CUIT del certificado (${cuitExtraido}) NO coincide con la CUIT objetivo (${CUIT_OBJETIVO})`
-      );
-    }
-    console.log("✅ CUIT validado correctamente.\n");
-
-    // Generar TRA
-    const { tra, uniqueId, generationTime, expirationTime } =
-      await generarTRA();
-    console.log("� TRA generado:\n", tra);
-
-    // Firmar CMS
-    const cms = await firmarCMS(tra, certPem, keyPem);
-    console.log(
-      "� CMS generado (primeros 200 chars):\n",
-      cms.slice(0, 200) + "..."
-    );
-
-    // Preparar SOAP
-    console.log(
-      "\n� SOAP listo para enviar (primeros 500 chars):\n",
-      '<?xml version="1.0" encoding="UTF-8"?>\n<soapenv:Envelope>...'
-    );
-
-    console.log("\n⏱ TRA timestamps:");
-    console.log("  uniqueId:", uniqueId);
-    console.log("  generationTime:", generationTime);
-    console.log("  expirationTime:", expirationTime);
-
-    // Enviar a WSAA
-    const wsaaResponse = await enviarWSAA(cms);
-
-    // Extraer loginCmsReturn
-    const loginCmsReturnXml = extraerTokenSign(wsaaResponse);
-    if (!loginCmsReturnXml)
-      throw new Error("No se pudo extraer loginCmsReturn del WSAA");
-
-    // Validar token
-    await validarToken(loginCmsReturnXml);
-
-    console.log("\n✅ Script finalizado. Token y SOAP listos para usar.");
-  } catch (err) {
-    console.error("\n❌ Error en validación/test:", err.message || err);
+    const data = JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8"));
+    const exp = new Date(data.expiration);
+    if (!data.token || !data.sign || !data.expiration || exp < new Date())
+      return null;
+    return data;
+  } catch {
+    return null;
   }
 }
 
-main();
+function guardarTokenPersistente({ token, sign, expiration }) {
+  fs.writeFileSync(
+    TOKEN_FILE,
+    JSON.stringify({ token, sign, expiration }, null, 2),
+    "utf8"
+  );
+  console.log("💾 Token guardado en wsaa-token.json");
+}
+
+// === GENERAR TOKEN PERSISTENTE ===
+async function generarTokenPersistente() {
+  let tokenData = leerTokenPersistente();
+  if (tokenData) {
+    console.log("✅ Token válido leído desde wsaa-token.json");
+    return tokenData;
+  }
+
+  console.log("� Leyendo certificado y clave...");
+  const certPem = fs.readFileSync(CERT_PATH, "utf8");
+  const keyPem = fs.readFileSync(KEY_PATH, "utf8");
+
+  const cert = forge.pki.certificateFromPem(certPem);
+
+  // Extraer CUIT
+  let cuitExtraido = "";
+  for (const attr of cert.subject.attributes) {
+    if (
+      (attr.shortName && attr.shortName.toUpperCase() === "SERIALNUMBER") ||
+      (attr.name && attr.name.toUpperCase() === "SERIALNUMBER")
+    ) {
+      const match = attr.value.match(/\d{11}/);
+      if (match) {
+        cuitExtraido = match[0];
+        break;
+      }
+    }
+  }
+
+  if (cuitExtraido !== CUIT_OBJETIVO)
+    throw new Error(
+      `⚠️ CUIT del certificado (${cuitExtraido}) NO coincide con la CUIT objetivo (${CUIT_OBJETIVO})`
+    );
+
+  const { tra } = await generarTRA();
+  const cms = await firmarCMS(tra, certPem, keyPem);
+  const wsaaResponse = await enviarWSAA(cms);
+  const loginCmsReturnXml = extraerTokenSign(wsaaResponse);
+  if (!loginCmsReturnXml)
+    throw new Error("No se pudo extraer loginCmsReturn del WSAA");
+
+  tokenData = await validarToken(loginCmsReturnXml);
+  guardarTokenPersistente(tokenData);
+
+  return tokenData;
+}
+
+// === EJECUTAR DIRECTAMENTE ===
+if (import.meta.url === `file://${process.argv[1]}`) {
+  (async () => {
+    try {
+      const tokenData = await generarTokenPersistente();
+      console.log("✅ Token persistente generado correctamente:");
+      console.log(tokenData);
+      const tokenLeido = leerTokenPersistente();
+      console.log("📄 Token leído desde JSON:", tokenLeido);
+    } catch (err) {
+      console.error("❌ Error al generar token persistente:", err);
+    }
+  })();
+}
+
+// === EXPORTS ES MODULES ===
+export { generarTokenPersistente, leerTokenPersistente };

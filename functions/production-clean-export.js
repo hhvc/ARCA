@@ -1,7 +1,8 @@
 /**
- * testWSAAValidate.js
- * Prueba de WSAA AFIP con logs completos y validación de token
- * Ejecutar: node testWSAAValidate.js
+ * production-clean-export.js
+ * Producción: WSAA AFIP con validación de token y CUIT
+ * Devuelve { token, sign, expiration } para integración
+ * Ejecutar: node production-clean-export.js
  */
 
 import fs from "fs";
@@ -10,12 +11,13 @@ import axios from "axios";
 import { parseStringPromise } from "xml2js";
 
 // === CONFIG ===
-const CERT_PATH = "./certs/certificado.crt"; // tu certificado PEM
-const KEY_PATH = "./certs/clave.key"; // tu clave privada PEM
-const CUIT_OBJETIVO = "20253006219"; // CUIT del computador autorizado
+const CERT_PATH = "./certs/certificado.crt";
+const KEY_PATH = "./certs/clave.key";
+const CUIT_OBJETIVO = "20253006219";
 const WSAA_URL = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms";
 const SERVICE = "ws_sr_padron_a4";
 
+// === GENERAR TRA ===
 async function generarTRA() {
   const uniqueId = Math.floor(Date.now() / 1000);
   const generationTime = new Date(Date.now() - 10 * 60 * 1000).toISOString();
@@ -36,6 +38,7 @@ async function generarTRA() {
   return { tra, uniqueId, generationTime, expirationTime };
 }
 
+// === FIRMAR CMS ===
 async function firmarCMS(tra, certPem, keyPem) {
   const p7 = forge.pkcs7.createSignedData();
   p7.content = forge.util.createBuffer(tra, "utf8");
@@ -55,6 +58,7 @@ async function firmarCMS(tra, certPem, keyPem) {
   return Buffer.from(der, "binary").toString("base64");
 }
 
+// === ENVIAR WSAA ===
 async function enviarWSAA(cms) {
   const soapBody = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
@@ -67,41 +71,26 @@ async function enviarWSAA(cms) {
   </soapenv:Body>
 </soapenv:Envelope>`;
 
-  console.log("� Enviando solicitud al WSAA...");
-  console.log("   URL:", WSAA_URL);
-
-  try {
-    const resp = await axios.post(WSAA_URL, soapBody, {
-      headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: "" },
-      timeout: 15000,
-    });
-    return resp.data;
-  } catch (err) {
-    if (err.response) {
-      console.error("❌ Error al enviar a AFIP:");
-      console.error("Código HTTP:", err.response.status);
-      console.error("Respuesta:", err.response.data);
-    } else {
-      console.error("❌ Error al enviar a AFIP:", err.message);
-    }
-    throw err;
-  }
+  const resp = await axios.post(WSAA_URL, soapBody, {
+    headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: "" },
+    timeout: 15000,
+  });
+  return resp.data;
 }
 
+// === EXTRAER LOGINCMS RETURN ===
 function extraerTokenSign(wsaaResponseXml) {
-  // Extrae el contenido de <loginCmsReturn>
   const match = wsaaResponseXml.match(
     /<loginCmsReturn>([^<]+)<\/loginCmsReturn>/
   );
-  if (!match) return null;
-
-  const decoded = match[1]
+  if (!match) throw new Error("No se encontró loginCmsReturn en WSAA response");
+  return match[1]
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"');
-  return decoded;
 }
 
+// === VALIDAR TOKEN ===
 async function validarToken(loginCmsReturnXml) {
   const parsed = await parseStringPromise(loginCmsReturnXml, {
     explicitArray: false,
@@ -109,36 +98,24 @@ async function validarToken(loginCmsReturnXml) {
   const credentials = parsed.loginTicketResponse?.credentials;
   const header = parsed.loginTicketResponse?.header;
 
-  if (!credentials?.token || !credentials?.sign) {
+  if (!credentials?.token || !credentials?.sign)
     throw new Error("No se pudo extraer token/sign del WSAA");
-  }
 
-  const token = credentials.token;
-  const sign = credentials.sign;
   const expiration = new Date(header.expirationTime);
-
-  console.log("⏱ Token expiración:", expiration.toISOString());
-  if (expiration < new Date()) {
+  if (expiration < new Date())
     throw new Error("❌ Token recibido ya está vencido");
-  }
 
-  console.log("✅ Token y sign OK, válidos hasta:", expiration.toISOString());
-  return { token, sign, expiration };
+  return { token: credentials.token, sign: credentials.sign, expiration };
 }
 
-async function main() {
+// === MAIN ===
+export async function obtenerTokenWSAA() {
   try {
-    console.log("� Leyendo certificado y clave...");
     const certPem = fs.readFileSync(CERT_PATH, "utf8");
     const keyPem = fs.readFileSync(KEY_PATH, "utf8");
-
     const cert = forge.pki.certificateFromPem(certPem);
 
-    // Extraer CN
-    const cnField = cert.subject.getField("CN");
-    const cn = cnField ? cnField.value : "";
-
-    // Extraer CUIT del SERIALNUMBER (con prefijo "CUIT ")
+    // Extraer CUIT
     let cuitExtraido = "";
     for (const attr of cert.subject.attributes) {
       if (
@@ -153,63 +130,31 @@ async function main() {
       }
     }
 
-    // Extraer Issuer legible
-    const issuer = cert.issuer.attributes
-      .map((a) => `${a.shortName || a.name}=${a.value}`)
-      .join(", ");
-
-    console.log("\n� Certificado del firmante:");
-    console.log("  CN (Nombre común / alias):", cn);
-    console.log("  CUIT extraído del certificado:", cuitExtraido);
-    console.log("  Issuer:", issuer);
-    console.log("  Fecha inicio:", cert.validity.notBefore.toISOString());
-    console.log("  Fecha fin:", cert.validity.notAfter.toISOString());
-
-    if (cuitExtraido !== CUIT_OBJETIVO) {
+    if (cuitExtraido !== CUIT_OBJETIVO)
       throw new Error(
         `⚠️ CUIT del certificado (${cuitExtraido}) NO coincide con la CUIT objetivo (${CUIT_OBJETIVO})`
       );
-    }
-    console.log("✅ CUIT validado correctamente.\n");
 
-    // Generar TRA
-    const { tra, uniqueId, generationTime, expirationTime } =
-      await generarTRA();
-    console.log("� TRA generado:\n", tra);
-
-    // Firmar CMS
+    const { tra } = await generarTRA();
     const cms = await firmarCMS(tra, certPem, keyPem);
-    console.log(
-      "� CMS generado (primeros 200 chars):\n",
-      cms.slice(0, 200) + "..."
-    );
-
-    // Preparar SOAP
-    console.log(
-      "\n� SOAP listo para enviar (primeros 500 chars):\n",
-      '<?xml version="1.0" encoding="UTF-8"?>\n<soapenv:Envelope>...'
-    );
-
-    console.log("\n⏱ TRA timestamps:");
-    console.log("  uniqueId:", uniqueId);
-    console.log("  generationTime:", generationTime);
-    console.log("  expirationTime:", expirationTime);
-
-    // Enviar a WSAA
     const wsaaResponse = await enviarWSAA(cms);
-
-    // Extraer loginCmsReturn
     const loginCmsReturnXml = extraerTokenSign(wsaaResponse);
-    if (!loginCmsReturnXml)
-      throw new Error("No se pudo extraer loginCmsReturn del WSAA");
+    const { token, sign, expiration } = await validarToken(loginCmsReturnXml);
 
-    // Validar token
-    await validarToken(loginCmsReturnXml);
-
-    console.log("\n✅ Script finalizado. Token y SOAP listos para usar.");
+    console.log("✅ Token y sign válidos hasta:", expiration.toISOString());
+    return { token, sign, expiration };
   } catch (err) {
-    console.error("\n❌ Error en validación/test:", err.message || err);
+    console.error("❌ Error en producción:", err.message || err);
+    throw err;
   }
 }
 
-main();
+// === EJECUCIÓN DIRECTA PARA TEST ===
+if (import.meta.url === `file://${process.argv[1]}`) {
+  obtenerTokenWSAA()
+    .then(({ token, sign }) => {
+      console.log("Token:", token.slice(0, 50) + "..."); // solo preview
+      console.log("Sign:", sign.slice(0, 50) + "...");
+    })
+    .catch(() => process.exit(1));
+}
