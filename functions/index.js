@@ -1,30 +1,14 @@
 /**
- * index.js - Google Cloud Functions (Node 22 + ESM)
- * Backend ARCA Dashboard - Integración AFIP WSAA + WS_SR_PADRON_A4 (Producción)
+ * index.js - Google Cloud Functions optimizado con token externo
  */
 
 import { onRequest } from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
-import cors from "cors";
-import axios from "axios";
-import { getPersonaData } from "./padron.js"; // tu función existente
-import {
-  generarTokenPersistente,
-  leerTokenPersistente,
-} from "./production-token-json.js"; // token persistente
+import { getPersonaData } from "./padron.js";
+import { getTokenFromWSAA } from "./wsaa.js";
 
-console.log("🧾 [ENV CHECK]", {
-  AFIP_CERT: process.env.AFIP_CERT ? "✅ presente" : "❌ falta",
-  AFIP_KEY: process.env.AFIP_KEY ? "✅ presente" : "❌ falta",
-  AFIP_CUIT: process.env.AFIP_CUIT || "❌ falta",
-  MODE: process.env.MODE || "❌ falta",
-});
-
-// =====================================================
-// === CONFIGURACIÓN GLOBAL ===
-const corsHandler = cors({ origin: true });
-
-function validarSecretos() {
+// Validación de environment variables
+function validarConfiguracion() {
   const faltan = [];
   if (!process.env.AFIP_CERT) faltan.push("AFIP_CERT");
   if (!process.env.AFIP_KEY) faltan.push("AFIP_KEY");
@@ -32,28 +16,28 @@ function validarSecretos() {
   return faltan;
 }
 
-// =====================================================
-// === FUNCIÓN 1: Autenticación WSAA (token + sign) ===
-export const afipAuth = onRequest(async (req, res) => {
-  corsHandler(req, res, async () => {
+function validarCUIT(cuit) {
+  return cuit && /^\d{11}$/.test(cuit);
+}
+
+// === FUNCIÓN 1: Generar token AFIP ===
+export const afipAuth = onRequest(
+  {
+    cors: true,
+  },
+  async (req, res) => {
     try {
-      logger.info("➡️ Solicitud a /afipAuth");
+      logger.info("🔑 Solicitud a /afipAuth");
 
-      const faltan = validarSecretos();
+      const faltan = validarConfiguracion();
       if (faltan.length > 0) {
-        logger.error("❌ Faltan secretos AFIP:", faltan);
-        return res
-          .status(500)
-          .json({ ok: false, error: `Faltan secretos: ${faltan.join(", ")}` });
+        return res.status(500).json({
+          ok: false,
+          error: `Faltan configuraciones: ${faltan.join(", ")}`,
+        });
       }
 
-      let tokenData = leerTokenPersistente();
-      if (!tokenData) {
-        tokenData = await generarTokenPersistente();
-        logger.info("💾 Token persistente generado y guardado");
-      } else {
-        logger.info("✅ Token persistente válido leído desde JSON");
-      }
+      const tokenData = await getTokenFromWSAA();
 
       res.status(200).json({
         ok: true,
@@ -62,116 +46,164 @@ export const afipAuth = onRequest(async (req, res) => {
         expiration: tokenData.expiration,
       });
     } catch (error) {
-      console.error("❌ ERROR EN /afipAuth:", error);
+      logger.error("❌ ERROR en /afipAuth:", error);
       res.status(500).json({
         ok: false,
-        error: error.message || "Error interno en afipAuth",
+        error: error.message || "Error interno en autenticación AFIP",
       });
     }
-  });
-});
+  }
+);
 
-// ==================================================
-// === FUNCIÓN 2: Consulta WS_SR_PADRON_A4 (AFIP) ===
-export const afipPadron = onRequest(async (req, res) => {
-  corsHandler(req, res, async () => {
+// === FUNCIÓN 2: Consulta padrón AFIP (usa token interno) ===
+export const afipPadron = onRequest(
+  {
+    cors: true,
+  },
+  async (req, res) => {
     try {
       const { cuit } = req.query;
-      if (!cuit) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "Falta el parámetro ?cuit=" });
+
+      if (!validarCUIT(cuit)) {
+        return res.status(400).json({
+          ok: false,
+          error: "CUIT inválido o faltante. Debe tener 11 dígitos.",
+        });
       }
 
-      const faltan = validarSecretos();
+      const faltan = validarConfiguracion();
       if (faltan.length > 0) {
-        return res
-          .status(500)
-          .json({ ok: false, error: `Faltan secretos: ${faltan.join(", ")}` });
+        return res.status(500).json({
+          ok: false,
+          error: `Faltan configuraciones: ${faltan.join(", ")}`,
+        });
       }
 
-      let tokenData = leerTokenPersistente();
-      if (!tokenData) {
-        tokenData = await generarTokenPersistente();
-        logger.info("💾 Token persistente generado y guardado");
-      }
-
+      const tokenData = await getTokenFromWSAA();
       const persona = await getPersonaData(cuit, {
         token: tokenData.token,
         sign: tokenData.sign,
         cuit: process.env.AFIP_CUIT,
       });
 
-      res.status(200).json({ ok: true, persona });
+      res.status(200).json({
+        ok: true,
+        persona,
+        consulta: { cuit, timestamp: new Date().toISOString() },
+      });
     } catch (error) {
-      console.error("❌ ERROR EN /afipPadron:", error);
-      res
-        .status(500)
-        .json({ ok: false, error: error.message || "Error interno" });
-    }
-  });
-});
+      logger.error("❌ ERROR en /afipPadron:", error);
 
-// =====================================================
-// === FUNCIÓN 3: Dummy WS_SR_PADRON_A4 (Prueba real) ===
-export const afipPadronDummy = onRequest(async (req, res) => {
-  corsHandler(req, res, async () => {
+      if (
+        error.message.includes("alreadyAuthenticated") ||
+        error.message.includes("ya existe")
+      ) {
+        return res.status(429).json({
+          ok: false,
+          error:
+            "Ya existe un token AFIP activo. Use el método con token externo (/afipPadronWithToken) o espere 5-10 minutos.",
+          solution:
+            "Obtenga un token en /afipAuth y úselo en /afipPadronWithToken",
+        });
+      }
+
+      res.status(500).json({
+        ok: false,
+        error: error.message || "Error interno en consulta AFIP",
+        cuit: req.query.cuit,
+      });
+    }
+  }
+);
+
+// === FUNCIÓN 3: Consulta padrón con token externo (CON SECRETS CONFIGURADOS) ===
+export const afipPadronWithToken = onRequest(
+  {
+    secrets: ["AFIP_CERT", "AFIP_KEY", "AFIP_CUIT", "MODE"],
+    cors: true,
+  },
+  async (req, res) => {
     try {
-      const faltan = validarSecretos();
+      const { cuit, token, sign } = req.query;
+
+      if (!validarCUIT(cuit)) {
+        return res.status(400).json({
+          ok: false,
+          error: "CUIT inválido o faltante. Debe tener 11 dígitos.",
+        });
+      }
+
+      if (!token || !sign) {
+        return res.status(400).json({
+          ok: false,
+          error: "Se requieren token y sign. Obténgalos desde /afipAuth",
+        });
+      }
+
+      const faltan = validarConfiguracion();
       if (faltan.length > 0) {
-        return res
-          .status(500)
-          .json({ ok: false, error: `Faltan secretos: ${faltan.join(", ")}` });
+        console.error("❌ Faltan configuraciones:", faltan);
+        return res.status(500).json({
+          ok: false,
+          error: `Faltan configuraciones: ${faltan.join(", ")}`,
+        });
       }
 
-      let tokenData = leerTokenPersistente();
-      if (!tokenData) {
-        tokenData = await generarTokenPersistente();
-        logger.info("💾 Token persistente generado y guardado");
-      }
+      console.log("✅ Usando token proporcionado para consulta");
 
-      const cuitConsultado = req.query.cuit || "20300000000"; // Dummy CUIT
-      const PADRON_URL =
-        process.env.MODE === "PROD"
-          ? "https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA4"
-          : "https://awshomo.afip.gov.ar/sr-padron/webservices/personaServiceA4";
-
-      const soapRequest = `<?xml version="1.0" encoding="UTF-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
-                  xmlns:ar="http://ar.gob.afip.dif.fecsr.padron/">
-  <soapenv:Header/>
-  <soapenv:Body>
-    <ar:getPersona>
-      <ar:token>${tokenData.token}</ar:token>
-      <ar:sign>${tokenData.sign}</ar:sign>
-      <ar:cuitRepresentada>${process.env.AFIP_CUIT}</ar:cuitRepresentada>
-      <ar:idPersona>${cuitConsultado}</ar:idPersona>
-    </ar:getPersona>
-  </soapenv:Body>
-</soapenv:Envelope>`;
-
-      const response = await axios.post(PADRON_URL, soapRequest, {
-        headers: { "Content-Type": "text/xml;charset=UTF-8" },
-        timeout: 20000,
+      const persona = await getPersonaData(cuit, {
+        token: token,
+        sign: sign,
+        cuit: process.env.AFIP_CUIT,
       });
 
-      const xml2js = (await import("xml2js")).default;
-      const parsed = await xml2js.parseStringPromise(response.data, {
-        explicitArray: false,
+      res.status(200).json({
+        ok: true,
+        persona,
+        consulta: {
+          cuit,
+          timestamp: new Date().toISOString(),
+          method: "withToken",
+        },
       });
-
-      const personaReturn =
-        parsed["soapenv:Envelope"]["soapenv:Body"]["ar:getPersonaResponse"]?.[
-          "ar:personaReturn"
-        ] || "Sin datos";
-
-      res.status(200).json({ ok: true, persona: personaReturn });
     } catch (error) {
-      console.error("❌ ERROR EN /afipPadronDummy:", error);
-      res.status(500).json({ ok: false, error: error.message });
+      logger.error("❌ ERROR en /afipPadronWithToken:", error);
+      res.status(500).json({
+        ok: false,
+        error: error.message || "Error interno en consulta AFIP",
+        cuit: req.query.cuit,
+      });
     }
-  });
-});
+  }
+);
 
-// For Firebase Emulator (ESM compatibility)
-export default { afipAuth, afipPadron, afipPadronDummy };
+// === FUNCIÓN DEBUG: Verificar secrets ===
+export const debugSecrets = onRequest(
+  {
+    secrets: ["AFIP_CERT", "AFIP_KEY", "AFIP_CUIT", "MODE"],
+    cors: true,
+  },
+  async (req, res) => {
+    try {
+      const secretsInfo = {
+        AFIP_CERT: process.env.AFIP_CERT
+          ? `✅ PRESENTE (${process.env.AFIP_CERT.length} caracteres)`
+          : "❌ FALTA",
+        AFIP_KEY: process.env.AFIP_KEY
+          ? `✅ PRESENTE (${process.env.AFIP_KEY.length} caracteres)`
+          : "❌ FALTA",
+        AFIP_CUIT: process.env.AFIP_CUIT
+          ? `✅ PRESENTE (${process.env.AFIP_CUIT})`
+          : "❌ FALTA",
+        MODE: process.env.MODE
+          ? `✅ PRESENTE (${process.env.MODE})`
+          : "❌ FALTA",
+      };
+
+      console.log("🔍 DEBUG Secrets Info:", secretsInfo);
+      res.status(200).json(secretsInfo);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
