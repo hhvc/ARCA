@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { getPadron } from "../services/afipApi";
+import ResultViewer from "./ResultViewer";
 
 export default function PadronForm() {
   const [cuit, setCuit] = useState("");
@@ -12,7 +13,7 @@ export default function PadronForm() {
     setResult(null);
     try {
       const res = await getPadron(cuit);
-      setResult(res.data);
+      setResult(res);
     } catch (err) {
       setResult({ error: err.message });
     } finally {
@@ -22,7 +23,7 @@ export default function PadronForm() {
 
   return (
     <div className="card shadow-sm p-4">
-      <h5>Consulta de Padrón AFIP</h5>
+      <h5>Consulta de Padrón ARCA</h5>
       <div className="input-group my-3">
         <input
           type="text"
@@ -39,11 +40,7 @@ export default function PadronForm() {
           {loading ? "Buscando..." : "Consultar"}
         </button>
       </div>
-      {result && (
-        <pre className="bg-light mt-3 p-2 small rounded">
-          {JSON.stringify(result, null, 2)}
-        </pre>
-      )}
+      <ResultViewer result={result} />
     </div>
   );
 }
