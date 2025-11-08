@@ -1,33 +1,68 @@
 /**
- * padron-a13.js - Consulta al padrón AFIP A13 - CORREGIDO
+ * padron-a13.js - Actualizado para usar Environment Variables
  */
 
 import axios from "axios";
+import https from "https";
 import { parseStringPromise } from "xml2js";
 
 // URLs CORREGIDAS según el manual oficial
-const URL_PADRON_A13 =
-  process.env.MODE === "PROD"
+const URL_PADRON_A13 = (isProd = false) =>
+  isProd
     ? "https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA13"
     : "https://awshomo.afip.gov.ar/sr-padron/webservices/personaServiceA13";
+
+// Función para crear agente HTTPS con certificados
+function createHttpsAgent(certPem, keyPem) {
+  try {
+    console.log("🔐 Creando agente HTTPS para padrón A13...");
+
+    // ✅ CORREGIDO: Aplicar el mismo formateo que en wsaa.js
+    const formatCertificate = (cert) => {
+      if (!cert) return cert;
+
+      // FORZAR el formateo - siempre agregar saltos de línea
+      const base64Content = cert
+        .replace(/-----BEGIN CERTIFICATE-----/g, "")
+        .replace(/-----END CERTIFICATE-----/g, "")
+        .trim();
+
+      // Reconstruir con formato PEM CORRECTO
+      return `-----BEGIN CERTIFICATE-----\n${base64Content}\n-----END CERTIFICATE-----`;
+    };
+
+    const certFormatted = formatCertificate(certPem);
+    const keyFormatted = keyPem; // La clave ya está bien formateada
+
+    console.log(
+      "🔐 [DEBUG PADRON A13] Certificado formateado (primeros 120 chars):"
+    );
+    console.log(certFormatted.substring(0, 120));
+
+    const agent = new https.Agent({
+      cert: certFormatted,
+      key: keyFormatted,
+      rejectUnauthorized: true,
+      secureProtocol: "TLSv1_2_method",
+      keepAlive: true,
+    });
+
+    console.log("✅ Agente HTTPS para padrón A13 creado exitosamente");
+    return agent;
+  } catch (error) {
+    console.error("❌ Error creando agente HTTPS para padrón:", error.message);
+    throw error;
+  }
+}
 
 function extractPersonaA13(parsed) {
   console.log("🔍 Buscando personaReturn en la estructura para A13...");
 
-  // La estructura real según los logs es:
-  // { 'soap:Body': { 'ns2:getPersonaResponse': { personaReturn: ... } } }
-
   if (parsed["soap:Body"] && parsed["soap:Body"]["ns2:getPersonaResponse"]) {
-    console.log(
-      "✅ Encontrado en estructura: soap:Body -> ns2:getPersonaResponse -> personaReturn"
-    );
+    console.log("✅ Encontrado en estructura estándar A13");
     const personaReturn =
       parsed["soap:Body"]["ns2:getPersonaResponse"]["personaReturn"];
-
-    if (personaReturn) {
-      console.log("✅ Datos extraídos correctamente para A13");
-      return personaReturn;
-    }
+    if (personaReturn) return personaReturn;
   }
 
   // Fallback: buscar recursivamente
@@ -69,7 +104,7 @@ function validarCUIT(cuit) {
   return true;
 }
 
-export async function getPersonaDataA13(cuit, secrets) {
+export async function getPersonaDataA13(cuit, secrets, isProd = false) {
   validarCUIT(cuit);
 
   if (!secrets?.cuit) {
@@ -80,8 +115,23 @@ export async function getPersonaDataA13(cuit, secrets) {
     throw new Error("Token y sign son requeridos");
   }
 
+  // ✅ USAR PROCESS.ENV EN LUGAR DE SECRET MANAGER
+  const cert = process.env.AFIP_CERT;
+  const key = process.env.AFIP_KEY;
+
+  console.log(
+    `📁 [A13] Environment variables cargadas - Cert: ${cert?.length} chars, Key: ${key?.length} chars`
+  );
+
+  if (!cert || !key) {
+    throw new Error(
+      "No se pudieron cargar certificados desde environment variables"
+    );
+  }
+
+  const url = URL_PADRON_A13(isProd);
   console.log(`🔍 [A13] Consultando AFIP para CUIT: ${cuit}`);
-  console.log(`🔍 [A13] URL: ${URL_PADRON_A13}`);
+  console.log(`🔍 [A13] URL: ${url}`);
   console.log(`🔍 [A13] CUIT Representada: ${secrets.cuit}`);
 
   // XML específico para A13 según el manual - namespace CORREGIDO
@@ -101,27 +151,25 @@ export async function getPersonaDataA13(cuit, secrets) {
 
   let data;
   try {
-    console.log(`🌐 [A13] Enviando solicitud a: ${URL_PADRON_A13}`);
-    const response = await axios.post(URL_PADRON_A13, xml, {
+    console.log(`🌐 [A13] Enviando solicitud a: ${url}`);
+
+    // Crear agente HTTPS para padrón A13
+    const httpsAgent = createHttpsAgent(cert, key);
+
+    const response = await axios.post(url, xml, {
       headers: {
         "Content-Type": "text/xml; charset=utf-8",
         SOAPAction: "",
       },
+      httpsAgent,
       timeout: 30000,
     });
     data = response.data;
     console.log("✅ [A13] Respuesta recibida de AFIP");
-
-    // Log temporal para debug
-    console.log(
-      "📄 [A13] Respuesta XML completa:",
-      data.substring(0, 1000) + "..."
-    );
   } catch (err) {
     console.error("❌ [A13] Error HTTP completo:", {
       message: err.message,
       code: err.code,
-      response: err.response?.data,
       status: err.response?.status,
     });
 
@@ -151,9 +199,7 @@ export async function getPersonaDataA13(cuit, secrets) {
     const faultString =
       data.match(/<faultstring>([^<]+)<\/faultstring>/)?.[1] ||
       "Error desconocido";
-    console.error(
-      `❌ [A13] Error SOAP AFIP en respuesta: [${faultCode}] ${faultString}`
-    );
+    console.error(`❌ [A13] Error SOAP AFIP: [${faultCode}] ${faultString}`);
     throw new Error(`AFIP A13 Error [${faultCode}]: ${faultString}`);
   }
 
@@ -168,10 +214,7 @@ export async function getPersonaDataA13(cuit, secrets) {
     const persona = extractPersonaA13(parsed);
 
     if (!persona) {
-      console.error(
-        "❌ [A13] No se pudo parsear respuesta AFIP. Estructura completa:",
-        parsed
-      );
+      console.error("❌ [A13] No se pudo parsear respuesta AFIP");
       throw new Error("No se pudo parsear la respuesta de AFIP PADRON A13");
     }
 
@@ -185,7 +228,6 @@ export async function getPersonaDataA13(cuit, secrets) {
     return persona;
   } catch (parseError) {
     console.error("❌ [A13] Error parseando XML:", parseError);
-    console.error("📄 [A13] XML que falló:", data.substring(0, 500));
     throw new Error("Error procesando respuesta de AFIP A13");
   }
 }

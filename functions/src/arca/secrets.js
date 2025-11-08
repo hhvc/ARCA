@@ -1,20 +1,17 @@
 /**
- * secrets.js - Manejo de secrets para Google Secret Manager
+ * secrets.js - CON DEBUGGING MEJORADO
  */
 
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 
 const client = new SecretManagerServiceClient();
 
-/**
- * Accede a un secret de Google Secret Manager
- */
 export async function accessSecret(secretName) {
   try {
     const projectId = process.env.GCLOUD_PROJECT || "arca-25621";
     const name = `projects/${projectId}/secrets/${secretName}/versions/latest`;
 
-    console.log(`🔐 Accediendo a secret: ${secretName}`);
+    console.log(`🔐 [DEBUG] Accediendo a secret: ${secretName}`);
 
     const [version] = await client.accessSecretVersion({ name });
 
@@ -22,26 +19,44 @@ export async function accessSecret(secretName) {
       throw new Error(`Secret ${secretName} está vacío o no existe`);
     }
 
-    const secretValue = version.payload.data.toString("utf8");
-    console.log(`✅ Secret ${secretName} cargado correctamente`);
+    const secretValue = version.payload.data.toString();
+
+    // DEBUG EXTENDIDO
+    console.log(
+      `✅ [DEBUG] Secret ${secretName} cargado - Longitud: ${secretValue.length} chars`
+    );
+    console.log(
+      `📄 [DEBUG] Primeros 100 chars: "${secretValue.substring(0, 100)}"`
+    );
+    console.log(
+      `📄 [DEBUG] Últimos 50 chars: "${secretValue.substring(
+        secretValue.length - 50
+      )}"`
+    );
+
+    // Verificar formato PEM
+    if (secretName.includes("CERT") || secretName.includes("cert")) {
+      if (!secretValue.includes("BEGIN CERTIFICATE")) {
+        console.warn(
+          `⚠️ [DEBUG] El secret ${secretName} no parece ser un certificado PEM válido`
+        );
+      }
+    }
+
+    if (secretName.includes("KEY") || secretName.includes("key")) {
+      if (!secretValue.includes("BEGIN PRIVATE KEY")) {
+        console.warn(
+          `⚠️ [DEBUG] El secret ${secretName} no parece ser una clave privada PEM válida`
+        );
+      }
+    }
 
     return secretValue;
   } catch (error) {
     console.error(
-      `❌ Error accediendo al secret ${secretName}:`,
+      `❌ [DEBUG] Error accediendo al secret ${secretName}:`,
       error.message
     );
-
-    if (error.message.includes("PERMISSION_DENIED")) {
-      throw new Error(
-        `Sin permisos para acceder a ${secretName}. Verifica los permisos de Secret Manager.`
-      );
-    }
-
-    if (error.message.includes("NOT_FOUND")) {
-      throw new Error(`El secret ${secretName} no existe.`);
-    }
-
-    throw new Error(`Error cargando ${secretName}: ${error.message}`);
+    throw error;
   }
 }

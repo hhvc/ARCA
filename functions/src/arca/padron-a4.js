@@ -1,29 +1,71 @@
+/**
+ * padron-a4.js - Actualizado para usar Environment Variables
+ */
+
 import axios from "axios";
+import https from "https";
 import { parseStringPromise } from "xml2js";
 
 // URLs corregidas según documentación AFIP
-const URL_PADRON =
-  process.env.MODE === "PROD"
+const URL_PADRON_A4 = (isProd = false) =>
+  isProd
     ? "https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA4"
     : "https://awshomo.afip.gov.ar/sr-padron/webservices/personaServiceA4";
+
+// Función para crear agente HTTPS con certificados
+function createHttpsAgent(certPem, keyPem) {
+  try {
+    console.log("🔐 Creando agente HTTPS para padrón A4...");
+
+    // ✅ CORREGIDO: Aplicar el mismo formateo que en wsaa.js
+    const formatCertificate = (cert) => {
+      if (!cert) return cert;
+
+      // FORZAR el formateo - siempre agregar saltos de línea
+      const base64Content = cert
+        .replace(/-----BEGIN CERTIFICATE-----/g, "")
+        .replace(/-----END CERTIFICATE-----/g, "")
+        .trim();
+
+      // Reconstruir con formato PEM CORRECTO
+      return `-----BEGIN CERTIFICATE-----\n${base64Content}\n-----END CERTIFICATE-----`;
+    };
+
+    const certFormatted = formatCertificate(certPem);
+    const keyFormatted = keyPem; // La clave ya está bien formateada
+
+    console.log(
+      "🔐 [DEBUG PADRON A4] Certificado formateado (primeros 120 chars):"
+    );
+    console.log(certFormatted.substring(0, 120));
+
+    const agent = new https.Agent({
+      cert: certFormatted,
+      key: keyFormatted,
+      rejectUnauthorized: true,
+      secureProtocol: "TLSv1_2_method",
+      keepAlive: true,
+    });
+
+    console.log("✅ Agente HTTPS para padrón A4 creado exitosamente");
+    return agent;
+  } catch (error) {
+    console.error(
+      "❌ Error creando agente HTTPS para padrón A4:",
+      error.message
+    );
+    throw error;
+  }
+}
 
 function extractPersona(parsed) {
   console.log("🔍 Buscando personaReturn en la estructura...");
 
-  // La estructura real según los logs es:
-  // { 'soap:Body': { 'ns2:getPersonaResponse': { personaReturn: ... } } }
-
   if (parsed["soap:Body"] && parsed["soap:Body"]["ns2:getPersonaResponse"]) {
-    console.log(
-      "✅ Encontrado en estructura: soap:Body -> ns2:getPersonaResponse -> personaReturn"
-    );
+    console.log("✅ Encontrado en estructura estándar A4");
     const personaReturn =
       parsed["soap:Body"]["ns2:getPersonaResponse"]["personaReturn"];
-
-    if (personaReturn) {
-      console.log("✅ Datos extraídos correctamente");
-      return personaReturn;
-    }
+    if (personaReturn) return personaReturn;
   }
 
   // Fallback: buscar recursivamente
@@ -36,7 +78,6 @@ function extractPersona(parsed) {
     }
 
     for (const key in obj) {
-      // CORRECCIÓN: Usar Object.prototype.hasOwnProperty.call() en lugar de obj.hasOwnProperty()
       if (Object.prototype.hasOwnProperty.call(obj, key)) {
         const result = findPersonaReturn(
           obj[key],
@@ -66,7 +107,7 @@ function validarCUIT(cuit) {
   return true;
 }
 
-export async function getPersonaData(cuit, secrets) {
+export async function getPersonaData(cuit, secrets, isProd = false) {
   validarCUIT(cuit);
 
   if (!secrets?.cuit) {
@@ -77,9 +118,24 @@ export async function getPersonaData(cuit, secrets) {
     throw new Error("Token y sign son requeridos");
   }
 
-  console.log(`🔍 Consultando AFIP para CUIT: ${cuit}`);
-  console.log(`🔍 Mode: ${process.env.MODE || "No configurado"}`);
-  console.log(`🔍 CUIT Representada: ${secrets.cuit}`);
+  // ✅ USAR PROCESS.ENV EN LUGAR DE SECRET MANAGER
+  const cert = process.env.AFIP_CERT;
+  const key = process.env.AFIP_KEY;
+
+  console.log(
+    `📁 [A4] Environment variables cargadas - Cert: ${cert?.length} chars, Key: ${key?.length} chars`
+  );
+
+  if (!cert || !key) {
+    throw new Error(
+      "No se pudieron cargar certificados desde environment variables"
+    );
+  }
+
+  const url = URL_PADRON_A4(isProd);
+  console.log(`🔍 [A4] Consultando AFIP para CUIT: ${cuit}`);
+  console.log(`🔍 [A4] URL: ${url}`);
+  console.log(`🔍 [A4] CUIT Representada: ${secrets.cuit}`);
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
@@ -97,24 +153,25 @@ export async function getPersonaData(cuit, secrets) {
 
   let data;
   try {
-    console.log(`🌐 Enviando solicitud a: ${URL_PADRON}`);
-    const response = await axios.post(URL_PADRON, xml, {
+    console.log(`🌐 [A4] Enviando solicitud a: ${url}`);
+
+    // Crear agente HTTPS para padrón A4
+    const httpsAgent = createHttpsAgent(cert, key);
+
+    const response = await axios.post(url, xml, {
       headers: {
         "Content-Type": "text/xml; charset=utf-8",
         SOAPAction: "",
       },
+      httpsAgent,
       timeout: 30000,
     });
     data = response.data;
-    console.log("✅ Respuesta recibida de AFIP");
-
-    // Log temporal para debug
-    console.log("📄 Respuesta XML completa:", data.substring(0, 1000) + "...");
+    console.log("✅ [A4] Respuesta recibida de AFIP");
   } catch (err) {
-    console.error("❌ Error HTTP completo:", {
+    console.error("❌ [A4] Error HTTP completo:", {
       message: err.message,
       code: err.code,
-      response: err.response?.data,
       status: err.response?.status,
     });
 
@@ -127,8 +184,8 @@ export async function getPersonaData(cuit, secrets) {
         const faultString =
           errorXml.match(/<faultstring>([^<]+)<\/faultstring>/)?.[1] ||
           "Error desconocido";
-        console.error(`❌ Error SOAP AFIP: [${faultCode}] ${faultString}`);
-        throw new Error(`AFIP Error [${faultCode}]: ${faultString}`);
+        console.error(`❌ [A4] Error SOAP AFIP: [${faultCode}] ${faultString}`);
+        throw new Error(`AFIP A4 Error [${faultCode}]: ${faultString}`);
       }
     }
 
@@ -142,10 +199,8 @@ export async function getPersonaData(cuit, secrets) {
     const faultString =
       data.match(/<faultstring>([^<]+)<\/faultstring>/)?.[1] ||
       "Error desconocido";
-    console.error(
-      `❌ Error SOAP AFIP en respuesta: [${faultCode}] ${faultString}`
-    );
-    throw new Error(`AFIP Error [${faultCode}]: ${faultString}`);
+    console.error(`❌ [A4] Error SOAP AFIP: [${faultCode}] ${faultString}`);
+    throw new Error(`AFIP A4 Error [${faultCode}]: ${faultString}`);
   }
 
   try {
@@ -155,28 +210,24 @@ export async function getPersonaData(cuit, secrets) {
       explicitRoot: false,
     });
 
-    console.log("🔍 Estructura parseada del XML");
+    console.log("🔍 [A4] Estructura parseada del XML");
     const persona = extractPersona(parsed);
 
     if (!persona) {
-      console.error(
-        "❌ No se pudo parsear respuesta AFIP. Estructura completa:",
-        parsed
-      );
+      console.error("❌ [A4] No se pudo parsear respuesta AFIP");
       throw new Error("No se pudo parsear la respuesta de AFIP PADRON A4");
     }
 
     // Validar si hay error en la respuesta
     if (persona.error) {
-      console.error("❌ Error en respuesta persona:", persona.error);
-      throw new Error(`AFIP Padron Error: ${persona.error}`);
+      console.error("❌ [A4] Error en respuesta persona:", persona.error);
+      throw new Error(`AFIP Padron A4 Error: ${persona.error}`);
     }
 
-    console.log(`✅ [AFIP PADRON] Consulta ${cuit} exitosa`);
+    console.log(`✅ [AFIP PADRON A4] Consulta ${cuit} exitosa`);
     return persona;
   } catch (parseError) {
-    console.error("❌ Error parseando XML:", parseError);
-    console.error("📄 XML que falló:", data.substring(0, 500));
-    throw new Error("Error procesando respuesta de AFIP");
+    console.error("❌ [A4] Error parseando XML:", parseError);
+    throw new Error("Error procesando respuesta de AFIP A4");
   }
 }

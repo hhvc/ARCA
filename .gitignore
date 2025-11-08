@@ -24,4 +24,4 @@ dist-ssr
 *.sw?
 
 ./functions/certs/*
-
+./functions/src/arca/secrets.js

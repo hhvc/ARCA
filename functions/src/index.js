@@ -1,5 +1,5 @@
 /**
- * index.js - Versión completa con soporte para A4 y A13
+ * index.js - Versión corregida con secrets actualizados
  */
 
 import { onRequest } from "firebase-functions/v2/https";
@@ -11,22 +11,9 @@ import { getToken, getTokenA13 } from "./arca/wsaa.js";
 // Determinar entorno
 const IS_PROD = false; // Por ahora forzamos HOMOLOGACIÓN
 
-// Configuración inicial
-console.log(
-  `🚀 Iniciando ARCA API en modo: ${IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN"}`
-);
-
 function validarCUIT(cuit) {
   return cuit && /^\d{11}$/.test(cuit);
 }
-
-// Configuración CORS mejorada
-const corsOptions = {
-  origin: true,
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: true,
-};
 
 // Handler CORS manual para mayor control
 const handleCors = (req, res, next) => {
@@ -41,7 +28,6 @@ const handleCors = (req, res, next) => {
     res.status(204).send("");
     return;
   }
-
   next();
 };
 
@@ -50,7 +36,8 @@ const handleCors = (req, res, next) => {
 // === FUNCIÓN 1: Generar token AFIP para A4 ===
 export const afipAuth = onRequest(
   {
-    cors: corsOptions,
+    secrets: ["AFIP_CERT", "AFIP_KEY", "arca-cuit-prod"],
+    cors: true,
   },
   async (req, res) => {
     handleCors(req, res, async () => {
@@ -88,7 +75,8 @@ export const afipAuth = onRequest(
 // === FUNCIÓN 2: Consulta padrón AFIP A4 (usa token interno) ===
 export const afipPadron = onRequest(
   {
-    cors: corsOptions,
+    secrets: ["AFIP_CERT", "AFIP_KEY", "arca-cuit-prod"],
+    cors: true,
   },
   async (req, res) => {
     handleCors(req, res, async () => {
@@ -112,11 +100,15 @@ export const afipPadron = onRequest(
 
         const tokenData = await getToken(IS_PROD);
 
-        const persona = await getPersonaData(cuit, {
-          token: tokenData.token,
-          sign: tokenData.sign,
-          cuit: tokenData.cuitRepresentada,
-        });
+        const persona = await getPersonaData(
+          cuit,
+          {
+            token: tokenData.token,
+            sign: tokenData.sign,
+            cuit: tokenData.cuitRepresentada,
+          },
+          IS_PROD
+        );
 
         res.status(200).json({
           ok: true,
@@ -165,7 +157,8 @@ export const afipPadron = onRequest(
 // === FUNCIÓN 3: Consulta padrón A4 con token externo ===
 export const afipPadronWithToken = onRequest(
   {
-    cors: corsOptions,
+    secrets: ["AFIP_CERT", "AFIP_KEY", "arca-cuit-prod"],
+    cors: true,
   },
   async (req, res) => {
     handleCors(req, res, async () => {
@@ -196,14 +189,26 @@ export const afipPadronWithToken = onRequest(
           }] Consulta A4 con token externo para CUIT: ${cuit}`
         );
 
-        // Obtener el CUIT representada según el entorno
-        const tokenData = await getToken(IS_PROD);
+        // ✅ CORREGIDO: No llamar a getToken(), usar directamente el CUIT del environment
+        const cuitRepresentada = process.env["arca-cuit-prod"]
+          ?.replace(/\r\n/g, "")
+          .trim();
 
-        const persona = await getPersonaData(cuit, {
-          token: token,
-          sign: sign,
-          cuit: tokenData.cuitRepresentada,
-        });
+        if (!cuitRepresentada) {
+          throw new Error(
+            "No se pudo cargar el CUIT representada desde environment variables"
+          );
+        }
+
+        const persona = await getPersonaData(
+          cuit,
+          {
+            token: token,
+            sign: sign,
+            cuit: cuitRepresentada,
+          },
+          IS_PROD
+        );
 
         res.status(200).json({
           ok: true,
@@ -239,7 +244,8 @@ export const afipPadronWithToken = onRequest(
 // === FUNCIÓN 4: Generar token AFIP para A13 ===
 export const afipAuthA13 = onRequest(
   {
-    cors: corsOptions,
+    secrets: ["AFIP_CERT", "AFIP_KEY", "arca-cuit-prod"],
+    cors: true,
   },
   async (req, res) => {
     handleCors(req, res, async () => {
@@ -248,6 +254,7 @@ export const afipAuthA13 = onRequest(
           `🔑 [${IS_PROD ? "PROD" : "HOMO"}] Solicitud a /afipAuthA13`
         );
 
+        // ✅ CORREGIDO: Llamar a getTokenA13 para obtener el token
         const tokenData = await getTokenA13(IS_PROD);
 
         res.status(200).json({
@@ -277,7 +284,8 @@ export const afipAuthA13 = onRequest(
 // === FUNCIÓN 5: Consulta padrón AFIP A13 (usa token interno) ===
 export const afipPadronA13 = onRequest(
   {
-    cors: corsOptions,
+    secrets: ["AFIP_CERT", "AFIP_KEY", "arca-cuit-prod"],
+    cors: true,
   },
   async (req, res) => {
     handleCors(req, res, async () => {
@@ -301,11 +309,15 @@ export const afipPadronA13 = onRequest(
 
         const tokenData = await getTokenA13(IS_PROD);
 
-        const persona = await getPersonaDataA13(cuit, {
-          token: tokenData.token,
-          sign: tokenData.sign,
-          cuit: tokenData.cuitRepresentada,
-        });
+        const persona = await getPersonaDataA13(
+          cuit,
+          {
+            token: tokenData.token,
+            sign: tokenData.sign,
+            cuit: tokenData.cuitRepresentada,
+          },
+          IS_PROD
+        );
 
         res.status(200).json({
           ok: true,
@@ -354,7 +366,8 @@ export const afipPadronA13 = onRequest(
 // === FUNCIÓN 6: Consulta padrón A13 con token externo ===
 export const afipPadronWithTokenA13 = onRequest(
   {
-    cors: corsOptions,
+    secrets: ["AFIP_CERT", "AFIP_KEY", "arca-cuit-prod"],
+    cors: true,
   },
   async (req, res) => {
     handleCors(req, res, async () => {
@@ -385,14 +398,26 @@ export const afipPadronWithTokenA13 = onRequest(
           }] Consulta A13 con token externo para CUIT: ${cuit}`
         );
 
-        // Obtener el CUIT representada según el entorno
-        const tokenData = await getTokenA13(IS_PROD);
+        // ✅ CORREGIDO: Obtener el CUIT directamente del environment, sin llamar a getTokenA13
+        const cuitRepresentada = process.env["arca-cuit-prod"]
+          ?.replace(/\r\n/g, "")
+          .trim();
 
-        const persona = await getPersonaDataA13(cuit, {
-          token: token,
-          sign: sign,
-          cuit: tokenData.cuitRepresentada,
-        });
+        if (!cuitRepresentada) {
+          throw new Error(
+            "No se pudo cargar el CUIT representada desde environment variables"
+          );
+        }
+
+        const persona = await getPersonaDataA13(
+          cuit,
+          {
+            token: token,
+            sign: sign,
+            cuit: cuitRepresentada,
+          },
+          IS_PROD
+        );
 
         res.status(200).json({
           ok: true,
@@ -428,7 +453,7 @@ export const afipPadronWithTokenA13 = onRequest(
 // === FUNCIÓN 7: Health Check ===
 export const healthCheck = onRequest(
   {
-    cors: corsOptions,
+    cors: true,
   },
   async (req, res) => {
     handleCors(req, res, async () => {
@@ -476,7 +501,7 @@ export const healthCheck = onRequest(
 // === FUNCIÓN 8: Debug Info ===
 export const debugInfo = onRequest(
   {
-    cors: corsOptions,
+    cors: true,
   },
   async (req, res) => {
     handleCors(req, res, async () => {
@@ -511,7 +536,7 @@ export const debugInfo = onRequest(
 // === FUNCIÓN 9: Status de Servicios ===
 export const servicesStatus = onRequest(
   {
-    cors: corsOptions,
+    cors: true,
   },
   async (req, res) => {
     handleCors(req, res, async () => {
@@ -549,6 +574,37 @@ export const servicesStatus = onRequest(
           error: error.message,
           environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
         });
+      }
+    });
+  }
+);
+
+// === FUNCIÓN 10: Debug de Secrets (útil para verificar) ===
+export const debugSecrets = onRequest(
+  {
+    secrets: ["AFIP_CERT", "AFIP_KEY", "arca-cuit-prod"],
+    cors: true,
+  },
+  async (req, res) => {
+    handleCors(req, res, async () => {
+      try {
+        const secretsInfo = {
+          AFIP_CERT: process.env.AFIP_CERT
+            ? `✅ PRESENTE (${process.env.AFIP_CERT.length} caracteres)`
+            : "❌ FALTA",
+          AFIP_KEY: process.env.AFIP_KEY
+            ? `✅ PRESENTE (${process.env.AFIP_KEY.length} caracteres)`
+            : "❌ FALTA",
+          "arca-cuit-prod": process.env["arca-cuit-prod"]
+            ? `✅ PRESENTE (${process.env["arca-cuit-prod"]})`
+            : "❌ FALTA",
+          MODE: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+        };
+
+        console.log("🔍 DEBUG Secrets Info:", secretsInfo);
+        res.status(200).json(secretsInfo);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
       }
     });
   }
