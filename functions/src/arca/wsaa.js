@@ -1,5 +1,5 @@
 /**
- * wsaa.js - ACTUALIZADO CON SECRETOS ESPECÍFICOS POR ENTORNO
+ * wsaa.js - ACTUALIZADO CON SERVICIO DE CONSTANCIA DE INSCRIPCIÓN
  */
 
 import forge from "node-forge";
@@ -11,6 +11,7 @@ import { getCachedToken, setCachedToken } from "./token-cache.js";
 // Constantes para los servicios
 const SERVICE_A4 = "ws_sr_padron_a4";
 const SERVICE_A13 = "ws_sr_padron_a13";
+const SERVICE_CONSTANCIA = "ws_sr_constancia_inscripcion"; // ✅ NUEVO SERVICIO
 
 // URLs para WSAA según entorno
 const URL_WSAA = (isProd = false) =>
@@ -410,7 +411,7 @@ function extraerLoginCmsReturn(wsaaResponseXml) {
   return decoded;
 }
 
-// Funciones de conveniencia para mantener compatibilidad
+// ==================== FUNCIONES DE CONVENIENCIA ====================
 
 // Función original (mantener para compatibilidad)
 export async function getToken(isProd = false) {
@@ -427,10 +428,20 @@ export async function getTokenA13(isProd = false) {
   return await getTokenFromWSAA(SERVICE_A13, isProd);
 }
 
+// ✅ NUEVA: Función específica para Constancia de Inscripción
+export async function getTokenConstancia(isProd = false) {
+  return await getTokenFromWSAA(SERVICE_CONSTANCIA, isProd);
+}
+
 // Función genérica para cualquier servicio
 export async function getTokenForService(service, isProd = false) {
   return await getTokenFromWSAA(service, isProd);
 }
 
 // Exportar constantes de servicios
-export { SERVICE_A4, SERVICE_A13, URL_WSAA };
+export {
+  SERVICE_A4,
+  SERVICE_A13,
+  SERVICE_CONSTANCIA,
+  URL_WSAA,
+};

@@ -23,8 +23,8 @@ export default function ServicePanel() {
       id: "constancia",
       name: "Constancia de Inscripción",
       description: "Constancia oficial de inscripción",
-      status: "coming-soon",
-      color: "secondary",
+      status: "active", // ✅ CAMBIADO: de "coming-soon" a "active"
+      color: "info", // ✅ CAMBIADO: de "secondary" a "info" (azul)
     },
     {
       id: "factura",
@@ -103,15 +103,9 @@ export default function ServicePanel() {
           )}
 
           {activeService === "constancia" && (
-            <div className="text-center py-4">
-              <div className="text-muted">
-                <i className="bi bi-tools fs-1"></i>
-                <h5>En Desarrollo</h5>
-                <p>
-                  Servicio de Constancia de Inscripción - Próximamente
-                  disponible
-                </p>
-              </div>
+            <div>
+              {/* ✅ REEMPLAZADO: Ahora usa PadronForm en lugar del mensaje de desarrollo */}
+              <PadronForm service="constancia" />
             </div>
           )}
 

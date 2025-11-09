@@ -1,4 +1,4 @@
-// src/services/afipApi.js - VERSIÓN DEFINITIVA
+// src/services/afipApi.js - VERSIÓN DEFINITIVA CON CONSTANCIA
 
 const BASE_URL = "https://us-central1-arca-25621.cloudfunctions.net";
 
@@ -20,6 +20,9 @@ export const testAuth = async (service = "a4") => {
     switch (normalizedService) {
       case "a13":
         endpoint = "/afipAuthA13";
+        break;
+      case "constancia":
+        endpoint = "/afipAuthConstancia";
         break;
       case "a4":
       default:
@@ -44,7 +47,7 @@ export const testAuth = async (service = "a4") => {
   }
 };
 
-// Función genérica para consultar padrón
+// Función genérica para consultar servicios AFIP
 export const getPadron = async (cuit, service = "a4") => {
   try {
     const normalizedService = service.toLowerCase();
@@ -59,22 +62,24 @@ export const getPadron = async (cuit, service = "a4") => {
     }
 
     console.log("✅ Token obtenido");
-    console.log(`📋 Consultando padrón ${normalizedService}...`);
+    console.log(`📋 Consultando ${normalizedService}...`);
 
     const { token, sign } = authResponse;
 
-    // ✅ USAR LAS FUNCIONES "WithToken" CORRECTAS
+    // ✅ ENDPOINTS PARA TODOS LOS SERVICIOS
     let endpoint;
     if (normalizedService === "a13") {
-      endpoint = "/afipPadronWithTokenA13"; // Para A13
+      endpoint = "/afipPadronWithTokenA13";
+    } else if (normalizedService === "constancia") {
+      endpoint = "/afipConstanciaWithToken";
     } else {
-      endpoint = "/afipPadronWithToken"; // Para a4
+      endpoint = "/afipPadronWithToken";
     }
 
     const environment =
       normalizedService === "a4" ? "homo" : currentEnvironment;
 
-    // ✅ USAR QUERY PARAMETERS (como funciona actualmente)
+    // ✅ USAR QUERY PARAMETERS
     const padronUrl = `${BASE_URL}${endpoint}?cuit=${cuit}&token=${encodeURIComponent(
       token
     )}&sign=${encodeURIComponent(sign)}&environment=${environment}`;
@@ -107,5 +112,8 @@ export const getPadron = async (cuit, service = "a4") => {
 // Funciones específicas para compatibilidad
 export const testAutha4 = () => testAuth("a4");
 export const testAuthA13 = () => testAuth("a13");
+export const testAuthConstancia = () => testAuth("constancia");
+
 export const getPadrona4 = (cuit) => getPadron(cuit, "a4");
 export const getPadronA13 = (cuit) => getPadron(cuit, "a13");
+export const getConstancia = (cuit) => getPadron(cuit, "constancia");

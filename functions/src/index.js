@@ -6,7 +6,8 @@ import { onRequest } from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
 import { getPersonaData } from "./arca/padron-a4.js";
 import { getPersonaDataA13 } from "./arca/padron-a13.js";
-import { getToken, getTokenA13 } from "./arca/wsaa.js";
+import { getToken, getTokenA13, getTokenForService } from "./arca/wsaa.js";
+import { getConstanciaInscripcion } from "./arca/constancia-inscripcion.js";
 
 // Handler CORS manual para mayor control
 const handleCors = (req, res, next) => {
@@ -472,9 +473,156 @@ export const afipPadronWithTokenA13 = onRequest(
   }
 );
 
+// ==================== CONSTANCIA DE INSCRIPCIÓN ====================
+
+// === FUNCIÓN 7: Generar token AFIP para Constancia de Inscripción ===
+export const afipAuthConstancia = onRequest(
+  {
+    secrets: [
+      "AFIP_CERT",
+      "AFIP_KEY",
+      "arca-cert-prod",
+      "arca-key-prod",
+      "arca-cuit-prod",
+    ],
+    cors: true,
+  },
+  async (req, res) => {
+    handleCors(req, res, async () => {
+      const IS_PROD = getEnvironment(req);
+
+      try {
+        logger.info(
+          `🔐 [${
+            IS_PROD ? "PROD" : "HOMO"
+          }] Iniciando autenticación para constancia`
+        );
+
+        const tokenData = await getTokenForService(
+          "ws_sr_constancia_inscripcion",
+          IS_PROD
+        );
+
+        res.status(200).json({
+          ok: true,
+          environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+          service: "ws_sr_constancia_inscripcion",
+          ...tokenData,
+        });
+      } catch (error) {
+        logger.error(
+          `❌ [${IS_PROD ? "PROD" : "HOMO"}] ERROR en /afipAuthConstancia:`,
+          error
+        );
+        res.status(500).json({
+          ok: false,
+          environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+          service: "ws_sr_constancia_inscripcion",
+          error: error.message,
+        });
+      }
+    });
+  }
+);
+
+// === FUNCIÓN 8: Consulta Constancia de Inscripción con token externo ===
+export const afipConstanciaWithToken = onRequest(
+  {
+    secrets: [
+      "AFIP_CERT",
+      "AFIP_KEY",
+      "arca-cert-prod",
+      "arca-key-prod",
+      "arca-cuit-prod",
+    ],
+    cors: true,
+  },
+  async (req, res) => {
+    handleCors(req, res, async () => {
+      const IS_PROD = getEnvironment(req);
+
+      try {
+        const { cuit, token, sign } = req.query;
+
+        if (!validarCUIT(cuit)) {
+          return res.status(400).json({
+            ok: false,
+            environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+            service: "ws_sr_constancia_inscripcion",
+            error: "CUIT inválido o faltante. Debe tener 11 dígitos.",
+          });
+        }
+
+        if (!token || !sign) {
+          return res.status(400).json({
+            ok: false,
+            environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+            service: "ws_sr_constancia_inscripcion",
+            error:
+              "Se requieren token y sign. Obténgalos desde /afipAuthConstancia",
+          });
+        }
+
+        logger.info(
+          `🔍 [${
+            IS_PROD ? "PROD" : "HOMO"
+          }] Consulta constancia con token externo para CUIT: ${cuit}`
+        );
+
+        const cuitRepresentada = process.env["arca-cuit-prod"]
+          ?.replace(/\r\n/g, "")
+          .trim();
+
+        if (!cuitRepresentada) {
+          throw new Error(
+            "No se pudo cargar el CUIT representada desde environment variables"
+          );
+        }
+
+        const constancia = await getConstanciaInscripcion(
+          cuit,
+          {
+            token: token,
+            sign: sign,
+            cuit: cuitRepresentada,
+          },
+          IS_PROD
+        );
+
+        res.status(200).json({
+          ok: true,
+          environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+          service: "ws_sr_constancia_inscripcion",
+          constancia,
+          consulta: {
+            cuit,
+            timestamp: new Date().toISOString(),
+            method: "withToken",
+            mode: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+          },
+        });
+      } catch (error) {
+        logger.error(
+          `❌ [${
+            IS_PROD ? "PROD" : "HOMO"
+          }] ERROR en /afipConstanciaWithToken:`,
+          error
+        );
+        res.status(500).json({
+          ok: false,
+          environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+          service: "ws_sr_constancia_inscripcion",
+          error: error.message || "Error interno en consulta AFIP Constancia",
+          cuit: req.query.cuit,
+        });
+      }
+    });
+  }
+);
+
 // ==================== UTILIDADES ====================
 
-// === FUNCIÓN 7: Health Check ===
+// === FUNCIÓN 9: Health Check ===
 export const healthCheck = onRequest(
   {
     cors: true,
@@ -502,6 +650,11 @@ export const healthCheck = onRequest(
               padronWithToken: "/afipPadronWithTokenA13",
               note: "A13 disponible en ambos entornos",
             },
+            constancia: {
+              auth: "/afipAuthConstancia",
+              constanciaWithToken: "/afipConstanciaWithToken",
+              note: "Constancia de Inscripción disponible en ambos entornos",
+            },
             utils: {
               health: "/healthCheck",
               debug: "/debugInfo",
@@ -526,7 +679,7 @@ export const healthCheck = onRequest(
   }
 );
 
-// === FUNCIÓN 8: Debug Info ===
+// === FUNCIÓN 10: Debug Info ===
 export const debugInfo = onRequest(
   {
     cors: true,
@@ -551,8 +704,14 @@ export const debugInfo = onRequest(
               status: "available",
               environment: "Both PROD and HOMO",
             },
+            constancia: {
+              service: "ws_sr_constancia_inscripcion",
+              status: "available",
+              environment: "Both PROD and HOMO",
+            },
           },
-          config: "Estable - A4 solo homologación, A13 ambos entornos",
+          config:
+            "Estable - A4 solo homologación, A13 y Constancia ambos entornos",
         };
 
         console.log(`🔍 [${IS_PROD ? "PROD" : "HOMO"}] Debug info solicitada`);
@@ -571,7 +730,7 @@ export const debugInfo = onRequest(
   }
 );
 
-// === FUNCIÓN 9: Status de Servicios ===
+// === FUNCIÓN 11: Status de Servicios ===
 export const servicesStatus = onRequest(
   {
     cors: true,
@@ -599,8 +758,16 @@ export const servicesStatus = onRequest(
               description: "Consulta básica de datos del contribuyente",
               environment: "PRODUCCIÓN and HOMOLOGACIÓN",
             },
+            constancia: {
+              name: "Constancia de Inscripción",
+              service: "ws_sr_constancia_inscripcion",
+              status: "available",
+              description: "Constancia oficial de inscripción AFIP",
+              environment: "PRODUCCIÓN and HOMOLOGACIÓN",
+            },
           },
-          notes: "A13 actualmente autorizado en AFIP para ambos entornos",
+          notes:
+            "A13 y Constancia actualmente autorizados en AFIP para ambos entornos",
         };
 
         console.log(

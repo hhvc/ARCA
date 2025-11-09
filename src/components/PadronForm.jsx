@@ -13,8 +13,8 @@ export default function PadronForm({ service = "a4" }) {
   const [result, setResult] = useState(null);
   const [isProduction, setIsProduction] = useState(false);
 
-  // Solo permitir cambio de entorno para A13
-  const canChangeEnvironment = service === "A13";
+  // Permitir cambio de entorno para A13 y Constancia
+  const canChangeEnvironment = service === "A13" || service === "constancia";
 
   useEffect(() => {
     if (canChangeEnvironment) {
@@ -61,6 +61,18 @@ export default function PadronForm({ service = "a4" }) {
             "Consulta básica autorizada - " +
             (isProduction ? "PRODUCCIÓN" : "HOMOLOGACIÓN"),
           placeholder: "CUIT (11 dígitos sin guiones)",
+          buttonColor: "btn-success",
+          buttonText: "Consultar A13",
+        };
+      case "constancia":
+        return {
+          title: "Constancia de Inscripción",
+          description:
+            "Constancia oficial de inscripción - " +
+            (isProduction ? "PRODUCCIÓN" : "HOMOLOGACIÓN"),
+          placeholder: "CUIT (11 dígitos sin guiones)",
+          buttonColor: "btn-info",
+          buttonText: "Obtener Constancia",
         };
       case "a4":
       default:
@@ -68,6 +80,8 @@ export default function PadronForm({ service = "a4" }) {
           title: "Padrón a4",
           description: "Consulta completa - Solo homologación",
           placeholder: "CUIT (11 dígitos sin guiones)",
+          buttonColor: "btn-warning",
+          buttonText: "Consultar a4",
         };
     }
   };
@@ -76,7 +90,9 @@ export default function PadronForm({ service = "a4" }) {
 
   return (
     <div>
-      {/* Selector de entorno solo para A13 */}
+      <h6>{serviceInfo.title}</h6>
+
+      {/* Selector de entorno para A13 y Constancia */}
       {canChangeEnvironment && (
         <div className="mb-3">
           <label className="form-label small">Entorno:</label>
@@ -115,7 +131,7 @@ export default function PadronForm({ service = "a4" }) {
           maxLength="11"
         />
         <button
-          className={`btn ${service === "A13" ? "btn-success" : "btn-warning"}`}
+          className={`btn ${serviceInfo.buttonColor}`}
           onClick={handleSearch}
           disabled={loading}
         >
@@ -125,7 +141,7 @@ export default function PadronForm({ service = "a4" }) {
               Consultando...
             </>
           ) : (
-            `Consultar ${service}`
+            serviceInfo.buttonText
           )}
         </button>
       </div>
