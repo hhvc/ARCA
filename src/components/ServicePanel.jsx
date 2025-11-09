@@ -14,7 +14,7 @@ export default function ServicePanel() {
     },
     {
       id: "padron14",
-      name: "Padrón A14",
+      name: "Padrón a4",
       description: "Consulta completa de datos del contribuyente",
       status: "homo-only",
       color: "warning",
@@ -93,12 +93,12 @@ export default function ServicePanel() {
 
           {activeService === "padron14" && (
             <div>
-              <h6>Consulta Padrón A14</h6>
+              <h6>Consulta Padrón a4</h6>
               <p className="text-muted small mb-3">
                 Solo disponible en entorno de homologación - Consulta completa
                 de datos
               </p>
-              <PadronForm service="A14" />
+              <PadronForm service="a4" />
             </div>
           )}
 

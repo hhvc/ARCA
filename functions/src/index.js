@@ -1,5 +1,5 @@
 /**
- * index.js - Versión corregida con secrets actualizados
+ * index.js - VERSIÓN ESTABLE - A4 SIEMPRE EN HOMOLOGACIÓN
  */
 
 import { onRequest } from "firebase-functions/v2/https";
@@ -7,13 +7,6 @@ import * as logger from "firebase-functions/logger";
 import { getPersonaData } from "./arca/padron-a4.js";
 import { getPersonaDataA13 } from "./arca/padron-a13.js";
 import { getToken, getTokenA13 } from "./arca/wsaa.js";
-
-// Determinar entorno
-const IS_PROD = false; // Por ahora forzamos HOMOLOGACIÓN
-
-function validarCUIT(cuit) {
-  return cuit && /^\d{11}$/.test(cuit);
-}
 
 // Handler CORS manual para mayor control
 const handleCors = (req, res, next) => {
@@ -31,6 +24,24 @@ const handleCors = (req, res, next) => {
   next();
 };
 
+// Función para determinar el entorno basado en parámetros
+const getEnvironment = (req) => {
+  // Prioridad: query parameter > body parameter > default homo
+  const environment = req.query.environment || req.body?.environment || "homo";
+  const isProd = environment === "prod";
+
+  console.log(
+    `🌍 Entorno determinado: ${environment} -> ${
+      isProd ? "PRODUCCIÓN" : "HOMOLOGACIÓN"
+    }`
+  );
+  return isProd;
+};
+
+function validarCUIT(cuit) {
+  return cuit && /^\d{11}$/.test(cuit);
+}
+
 // ==================== PADRÓN A4 ====================
 
 // === FUNCIÓN 1: Generar token AFIP para A4 ===
@@ -41,29 +52,27 @@ export const afipAuth = onRequest(
   },
   async (req, res) => {
     handleCors(req, res, async () => {
+      // ✅ A4 SIEMPRE en homologación
+      const IS_PROD = false;
+
       try {
-        logger.info(
-          `🔑 [${IS_PROD ? "PROD" : "HOMO"}] Solicitud a /afipAuth (A4)`
-        );
+        logger.info("🔑 [HOMO] Solicitud a /afipAuth (A4)");
 
         const tokenData = await getToken(IS_PROD);
 
         res.status(200).json({
           ok: true,
-          environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+          environment: "HOMOLOGACIÓN",
           service: "ws_sr_padron_a4",
           token: tokenData.token,
           sign: tokenData.sign,
           expiration: tokenData.expiration,
         });
       } catch (error) {
-        logger.error(
-          `❌ [${IS_PROD ? "PROD" : "HOMO"}] ERROR en /afipAuth:`,
-          error
-        );
+        logger.error("❌ [HOMO] ERROR en /afipAuth:", error);
         res.status(500).json({
           ok: false,
-          environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+          environment: "HOMOLOGACIÓN",
           service: "ws_sr_padron_a4",
           error: error.message || "Error interno en autenticación AFIP A4",
         });
@@ -80,23 +89,22 @@ export const afipPadron = onRequest(
   },
   async (req, res) => {
     handleCors(req, res, async () => {
+      // ✅ A4 SIEMPRE en homologación
+      const IS_PROD = false;
+
       try {
         const { cuit } = req.query;
 
         if (!validarCUIT(cuit)) {
           return res.status(400).json({
             ok: false,
-            environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+            environment: "HOMOLOGACIÓN",
             service: "ws_sr_padron_a4",
             error: "CUIT inválido o faltante. Debe tener 11 dígitos.",
           });
         }
 
-        logger.info(
-          `🔍 [${
-            IS_PROD ? "PROD" : "HOMO"
-          }] Consultando padrón A4 para CUIT: ${cuit}`
-        );
+        logger.info(`🔍 [HOMO] Consultando padrón A4 para CUIT: ${cuit}`);
 
         const tokenData = await getToken(IS_PROD);
 
@@ -112,20 +120,17 @@ export const afipPadron = onRequest(
 
         res.status(200).json({
           ok: true,
-          environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+          environment: "HOMOLOGACIÓN",
           service: "ws_sr_padron_a4",
           persona,
           consulta: {
             cuit,
             timestamp: new Date().toISOString(),
-            mode: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+            mode: "HOMOLOGACIÓN",
           },
         });
       } catch (error) {
-        logger.error(
-          `❌ [${IS_PROD ? "PROD" : "HOMO"}] ERROR en /afipPadron:`,
-          error
-        );
+        logger.error("❌ [HOMO] ERROR en /afipPadron:", error);
 
         if (
           error.message.includes("alreadyAuthenticated") ||
@@ -133,7 +138,7 @@ export const afipPadron = onRequest(
         ) {
           return res.status(429).json({
             ok: false,
-            environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+            environment: "HOMOLOGACIÓN",
             service: "ws_sr_padron_a4",
             error:
               "Ya existe un token AFIP activo. Use el método con token externo (/afipPadronWithToken) o espere 5-10 minutos.",
@@ -144,7 +149,7 @@ export const afipPadron = onRequest(
 
         res.status(500).json({
           ok: false,
-          environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+          environment: "HOMOLOGACIÓN",
           service: "ws_sr_padron_a4",
           error: error.message || "Error interno en consulta AFIP A4",
           cuit: req.query.cuit,
@@ -162,13 +167,16 @@ export const afipPadronWithToken = onRequest(
   },
   async (req, res) => {
     handleCors(req, res, async () => {
+      // ✅ A4 SIEMPRE en homologación
+      const IS_PROD = false;
+
       try {
         const { cuit, token, sign } = req.query;
 
         if (!validarCUIT(cuit)) {
           return res.status(400).json({
             ok: false,
-            environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+            environment: "HOMOLOGACIÓN",
             service: "ws_sr_padron_a4",
             error: "CUIT inválido o faltante. Debe tener 11 dígitos.",
           });
@@ -177,19 +185,16 @@ export const afipPadronWithToken = onRequest(
         if (!token || !sign) {
           return res.status(400).json({
             ok: false,
-            environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+            environment: "HOMOLOGACIÓN",
             service: "ws_sr_padron_a4",
             error: "Se requieren token y sign. Obténgalos desde /afipAuth",
           });
         }
 
         logger.info(
-          `🔍 [${
-            IS_PROD ? "PROD" : "HOMO"
-          }] Consulta A4 con token externo para CUIT: ${cuit}`
+          `🔍 [HOMO] Consulta A4 con token externo para CUIT: ${cuit}`
         );
 
-        // ✅ CORREGIDO: No llamar a getToken(), usar directamente el CUIT del environment
         const cuitRepresentada = process.env["arca-cuit-prod"]
           ?.replace(/\r\n/g, "")
           .trim();
@@ -212,24 +217,21 @@ export const afipPadronWithToken = onRequest(
 
         res.status(200).json({
           ok: true,
-          environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+          environment: "HOMOLOGACIÓN",
           service: "ws_sr_padron_a4",
           persona,
           consulta: {
             cuit,
             timestamp: new Date().toISOString(),
             method: "withToken",
-            mode: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+            mode: "HOMOLOGACIÓN",
           },
         });
       } catch (error) {
-        logger.error(
-          `❌ [${IS_PROD ? "PROD" : "HOMO"}] ERROR en /afipPadronWithToken:`,
-          error
-        );
+        logger.error("❌ [HOMO] ERROR en /afipPadronWithToken:", error);
         res.status(500).json({
           ok: false,
-          environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
+          environment: "HOMOLOGACIÓN",
           service: "ws_sr_padron_a4",
           error: error.message || "Error interno en consulta AFIP A4",
           cuit: req.query.cuit,
@@ -244,17 +246,24 @@ export const afipPadronWithToken = onRequest(
 // === FUNCIÓN 4: Generar token AFIP para A13 ===
 export const afipAuthA13 = onRequest(
   {
-    secrets: ["AFIP_CERT", "AFIP_KEY", "arca-cuit-prod"],
+    secrets: [
+      "AFIP_CERT", // Para homologación
+      "AFIP_KEY", // Para homologación
+      "arca-cert-prod", // Para producción
+      "arca-key-prod", // Para producción
+      "arca-cuit-prod", // Para ambos entornos
+    ],
     cors: true,
   },
   async (req, res) => {
     handleCors(req, res, async () => {
+      const IS_PROD = getEnvironment(req);
+
       try {
         logger.info(
           `🔑 [${IS_PROD ? "PROD" : "HOMO"}] Solicitud a /afipAuthA13`
         );
 
-        // ✅ CORREGIDO: Llamar a getTokenA13 para obtener el token
         const tokenData = await getTokenA13(IS_PROD);
 
         res.status(200).json({
@@ -284,11 +293,19 @@ export const afipAuthA13 = onRequest(
 // === FUNCIÓN 5: Consulta padrón AFIP A13 (usa token interno) ===
 export const afipPadronA13 = onRequest(
   {
-    secrets: ["AFIP_CERT", "AFIP_KEY", "arca-cuit-prod"],
+    secrets: [
+      "AFIP_CERT", // Para homologación
+      "AFIP_KEY", // Para homologación
+      "arca-cert-prod", // Para producción
+      "arca-key-prod", // Para producción
+      "arca-cuit-prod", // Para ambos entornos
+    ],
     cors: true,
   },
   async (req, res) => {
     handleCors(req, res, async () => {
+      const IS_PROD = getEnvironment(req);
+
       try {
         const { cuit } = req.query;
 
@@ -366,11 +383,19 @@ export const afipPadronA13 = onRequest(
 // === FUNCIÓN 6: Consulta padrón A13 con token externo ===
 export const afipPadronWithTokenA13 = onRequest(
   {
-    secrets: ["AFIP_CERT", "AFIP_KEY", "arca-cuit-prod"],
+    secrets: [
+      "AFIP_CERT", // Para homologación
+      "AFIP_KEY", // Para homologación
+      "arca-cert-prod", // Para producción
+      "arca-key-prod", // Para producción
+      "arca-cuit-prod", // Para ambos entornos
+    ],
     cors: true,
   },
   async (req, res) => {
     handleCors(req, res, async () => {
+      const IS_PROD = getEnvironment(req);
+
       try {
         const { cuit, token, sign } = req.query;
 
@@ -398,7 +423,6 @@ export const afipPadronWithTokenA13 = onRequest(
           }] Consulta A13 con token externo para CUIT: ${cuit}`
         );
 
-        // ✅ CORREGIDO: Obtener el CUIT directamente del environment, sin llamar a getTokenA13
         const cuitRepresentada = process.env["arca-cuit-prod"]
           ?.replace(/\r\n/g, "")
           .trim();
@@ -457,6 +481,8 @@ export const healthCheck = onRequest(
   },
   async (req, res) => {
     handleCors(req, res, async () => {
+      const IS_PROD = getEnvironment(req);
+
       try {
         const healthInfo = {
           status: "online",
@@ -468,11 +494,13 @@ export const healthCheck = onRequest(
               auth: "/afipAuth",
               padron: "/afipPadron",
               padronWithToken: "/afipPadronWithToken",
+              note: "A4 solo disponible en homologación",
             },
             a13: {
               auth: "/afipAuthA13",
               padron: "/afipPadronA13",
               padronWithToken: "/afipPadronWithTokenA13",
+              note: "A13 disponible en ambos entornos",
             },
             utils: {
               health: "/healthCheck",
@@ -505,16 +533,26 @@ export const debugInfo = onRequest(
   },
   async (req, res) => {
     handleCors(req, res, async () => {
+      const IS_PROD = getEnvironment(req);
+
       try {
         const debugInfo = {
           environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
           nodeVersion: process.version,
           region: process.env.FUNCTION_REGION || "us-central1",
           services: {
-            a4: "ws_sr_padron_a4",
-            a13: "ws_sr_padron_a13",
+            a4: {
+              service: "ws_sr_padron_a4",
+              status: "available",
+              environment: "HOMOLOGACIÓN only",
+            },
+            a13: {
+              service: "ws_sr_padron_a13",
+              status: "available",
+              environment: "Both PROD and HOMO",
+            },
           },
-          config: "Optimizado - Soporte completo A4 y A13",
+          config: "Estable - A4 solo homologación, A13 ambos entornos",
         };
 
         console.log(`🔍 [${IS_PROD ? "PROD" : "HOMO"}] Debug info solicitada`);
@@ -540,6 +578,8 @@ export const servicesStatus = onRequest(
   },
   async (req, res) => {
     handleCors(req, res, async () => {
+      const IS_PROD = getEnvironment(req);
+
       try {
         const statusInfo = {
           environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
@@ -550,15 +590,17 @@ export const servicesStatus = onRequest(
               service: "ws_sr_padron_a4",
               status: "available",
               description: "Consulta completa de datos del contribuyente",
+              environment: "HOMOLOGACIÓN only",
             },
             a13: {
               name: "Padrón A13",
               service: "ws_sr_padron_a13",
               status: "available",
               description: "Consulta básica de datos del contribuyente",
+              environment: "PRODUCCIÓN and HOMOLOGACIÓN",
             },
           },
-          notes: "A13 actualmente autorizado en AFIP",
+          notes: "A13 actualmente autorizado en AFIP para ambos entornos",
         };
 
         console.log(
@@ -574,37 +616,6 @@ export const servicesStatus = onRequest(
           error: error.message,
           environment: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
         });
-      }
-    });
-  }
-);
-
-// === FUNCIÓN 10: Debug de Secrets (útil para verificar) ===
-export const debugSecrets = onRequest(
-  {
-    secrets: ["AFIP_CERT", "AFIP_KEY", "arca-cuit-prod"],
-    cors: true,
-  },
-  async (req, res) => {
-    handleCors(req, res, async () => {
-      try {
-        const secretsInfo = {
-          AFIP_CERT: process.env.AFIP_CERT
-            ? `✅ PRESENTE (${process.env.AFIP_CERT.length} caracteres)`
-            : "❌ FALTA",
-          AFIP_KEY: process.env.AFIP_KEY
-            ? `✅ PRESENTE (${process.env.AFIP_KEY.length} caracteres)`
-            : "❌ FALTA",
-          "arca-cuit-prod": process.env["arca-cuit-prod"]
-            ? `✅ PRESENTE (${process.env["arca-cuit-prod"]})`
-            : "❌ FALTA",
-          MODE: IS_PROD ? "PRODUCCIÓN" : "HOMOLOGACIÓN",
-        };
-
-        console.log("🔍 DEBUG Secrets Info:", secretsInfo);
-        res.status(200).json(secretsInfo);
-      } catch (error) {
-        res.status(500).json({ error: error.message });
       }
     });
   }

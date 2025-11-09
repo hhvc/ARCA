@@ -1,26 +1,39 @@
-// src/services/afipApi.js - VERSIÓN ACTUALIZADA CON MÚLTIPLES SERVICIOS
-const PRODUCTION_URL = "https://us-central1-arca-25621.cloudfunctions.net";
+// src/services/afipApi.js - VERSIÓN DEFINITIVA
 
-// Forzar siempre URL de producción
-const BASE_URL = PRODUCTION_URL;
+const BASE_URL = "https://us-central1-arca-25621.cloudfunctions.net";
+
+let currentEnvironment = "homo";
+
+export const setEnvironment = (environment) => {
+  currentEnvironment = environment;
+  console.log(`🌍 Entorno cambiado a: ${environment}`);
+};
+
+export const getCurrentEnvironment = () => currentEnvironment;
 
 // Función genérica para autenticación
-export const testAuth = async (service = "A14") => {
+export const testAuth = async (service = "a4") => {
   try {
-    console.log(`🔗 Conectando a Cloud Functions para servicio ${service}...`);
-
     let endpoint;
-    switch (service) {
-      case "A13":
+    const normalizedService = service.toLowerCase();
+
+    switch (normalizedService) {
+      case "a13":
         endpoint = "/afipAuthA13";
         break;
-      case "A14":
+      case "a4":
       default:
         endpoint = "/afipAuth";
         break;
     }
 
-    const response = await fetch(`${BASE_URL}${endpoint}`);
+    const environment =
+      normalizedService === "a4" ? "homo" : currentEnvironment;
+    const url = `${BASE_URL}${endpoint}?environment=${environment}`;
+
+    console.log(`🔗 Autenticación ${normalizedService} en ${environment}`);
+
+    const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
@@ -32,39 +45,43 @@ export const testAuth = async (service = "A14") => {
 };
 
 // Función genérica para consultar padrón
-export const getPadron = async (cuit, service = "A14") => {
+export const getPadron = async (cuit, service = "a4") => {
   try {
-    console.log(`🔑 Paso 1: Obteniendo token AFIP para ${service}...`);
+    const normalizedService = service.toLowerCase();
+
+    console.log(`🔑 Obteniendo token para ${normalizedService}...`);
 
     // Primero obtener el token
-    const authResponse = await testAuth(service);
+    const authResponse = await testAuth(normalizedService);
 
     if (!authResponse.ok) {
       throw new Error(`Error de autenticación: ${authResponse.error}`);
     }
 
-    console.log("✅ Token obtenido correctamente");
-    console.log(`📋 Paso 2: Consultando padrón ${service} con token...`);
+    console.log("✅ Token obtenido");
+    console.log(`📋 Consultando padrón ${normalizedService}...`);
 
-    // Luego usar el token para consultar el padrón
     const { token, sign } = authResponse;
 
+    // ✅ USAR LAS FUNCIONES "WithToken" CORRECTAS
     let endpoint;
-    switch (service) {
-      case "A13":
-        endpoint = "/afipPadronWithTokenA13";
-        break;
-      case "A14":
-      default:
-        endpoint = "/afipPadronWithToken";
-        break;
+    if (normalizedService === "a13") {
+      endpoint = "/afipPadronWithTokenA13"; // Para A13
+    } else {
+      endpoint = "/afipPadronWithToken"; // Para a4
     }
 
-    const padronResponse = await fetch(
-      `${BASE_URL}${endpoint}?cuit=${cuit}&token=${encodeURIComponent(
-        token
-      )}&sign=${encodeURIComponent(sign)}`
-    );
+    const environment =
+      normalizedService === "a4" ? "homo" : currentEnvironment;
+
+    // ✅ USAR QUERY PARAMETERS (como funciona actualmente)
+    const padronUrl = `${BASE_URL}${endpoint}?cuit=${cuit}&token=${encodeURIComponent(
+      token
+    )}&sign=${encodeURIComponent(sign)}&environment=${environment}`;
+
+    console.log(`🔗 URL: ${padronUrl}`);
+
+    const padronResponse = await fetch(padronUrl);
 
     if (!padronResponse.ok) {
       const errorText = await padronResponse.text();
@@ -79,7 +96,7 @@ export const getPadron = async (cuit, service = "A14") => {
       throw new Error(padronData.error || "Error desconocido en consulta AFIP");
     }
 
-    console.log(`✅ Consulta al padrón ${service} exitosa`);
+    console.log(`✅ Consulta ${normalizedService} exitosa`);
     return padronData;
   } catch (error) {
     console.error(`❌ Error en getPadron ${service}:`, error);
@@ -88,7 +105,7 @@ export const getPadron = async (cuit, service = "A14") => {
 };
 
 // Funciones específicas para compatibilidad
-export const testAuthA14 = () => testAuth("A14");
-export const testAuthA13 = () => testAuth("A13");
-export const getPadronA14 = (cuit) => getPadron(cuit, "A14");
-export const getPadronA13 = (cuit) => getPadron(cuit, "A13");
+export const testAutha4 = () => testAuth("a4");
+export const testAuthA13 = () => testAuth("a13");
+export const getPadrona4 = (cuit) => getPadron(cuit, "a4");
+export const getPadronA13 = (cuit) => getPadron(cuit, "a13");

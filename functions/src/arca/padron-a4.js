@@ -1,5 +1,5 @@
 /**
- * padron-a4.js - Actualizado para usar Environment Variables
+ * padron-a4.js - VERSIÓN ESTABLE
  */
 
 import axios from "axios";
@@ -17,27 +17,19 @@ function createHttpsAgent(certPem, keyPem) {
   try {
     console.log("🔐 Creando agente HTTPS para padrón A4...");
 
-    // ✅ CORREGIDO: Aplicar el mismo formateo que en wsaa.js
     const formatCertificate = (cert) => {
       if (!cert) return cert;
 
-      // FORZAR el formateo - siempre agregar saltos de línea
       const base64Content = cert
         .replace(/-----BEGIN CERTIFICATE-----/g, "")
         .replace(/-----END CERTIFICATE-----/g, "")
         .trim();
 
-      // Reconstruir con formato PEM CORRECTO
       return `-----BEGIN CERTIFICATE-----\n${base64Content}\n-----END CERTIFICATE-----`;
     };
 
     const certFormatted = formatCertificate(certPem);
-    const keyFormatted = keyPem; // La clave ya está bien formateada
-
-    console.log(
-      "🔐 [DEBUG PADRON A4] Certificado formateado (primeros 120 chars):"
-    );
-    console.log(certFormatted.substring(0, 120));
+    const keyFormatted = keyPem;
 
     const agent = new https.Agent({
       cert: certFormatted,
@@ -68,7 +60,6 @@ function extractPersona(parsed) {
     if (personaReturn) return personaReturn;
   }
 
-  // Fallback: buscar recursivamente
   function findPersonaReturn(obj, path = "") {
     if (!obj || typeof obj !== "object") return null;
 
@@ -118,7 +109,7 @@ export async function getPersonaData(cuit, secrets, isProd = false) {
     throw new Error("Token y sign son requeridos");
   }
 
-  // ✅ USAR PROCESS.ENV EN LUGAR DE SECRET MANAGER
+  // ✅ MANTENER ORIGINAL - usar AFIP_CERT y AFIP_KEY directamente
   const cert = process.env.AFIP_CERT;
   const key = process.env.AFIP_KEY;
 
@@ -128,7 +119,7 @@ export async function getPersonaData(cuit, secrets, isProd = false) {
 
   if (!cert || !key) {
     throw new Error(
-      "No se pudieron cargar certificados desde environment variables"
+      "No se pudieron cargar los certificados desde environment variables"
     );
   }
 
@@ -155,7 +146,6 @@ export async function getPersonaData(cuit, secrets, isProd = false) {
   try {
     console.log(`🌐 [A4] Enviando solicitud a: ${url}`);
 
-    // Crear agente HTTPS para padrón A4
     const httpsAgent = createHttpsAgent(cert, key);
 
     const response = await axios.post(url, xml, {
@@ -192,7 +182,6 @@ export async function getPersonaData(cuit, secrets, isProd = false) {
     throw new Error(`Error HTTP al llamar WS_SR_PADRON_A4: ${err.message}`);
   }
 
-  // Manejo de error SOAP en la respuesta exitosa
   if (data.includes("<faultcode>")) {
     const faultCode =
       data.match(/<faultcode>([^<]+)<\/faultcode>/)?.[1] || "Desconocido";
@@ -218,7 +207,6 @@ export async function getPersonaData(cuit, secrets, isProd = false) {
       throw new Error("No se pudo parsear la respuesta de AFIP PADRON A4");
     }
 
-    // Validar si hay error en la respuesta
     if (persona.error) {
       console.error("❌ [A4] Error en respuesta persona:", persona.error);
       throw new Error(`AFIP Padron A4 Error: ${persona.error}`);

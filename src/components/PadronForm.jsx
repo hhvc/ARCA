@@ -1,11 +1,32 @@
-import { useState } from "react";
-import { getPadron } from "../services/afipApi";
+// src/components/PadronForm.js
+import { useState, useEffect } from "react";
+import {
+  getPadron,
+  setEnvironment,
+  getCurrentEnvironment,
+} from "../services/afipApi";
 import ResultViewer from "./ResultViewer";
 
-export default function PadronForm({ service = "A14" }) {
+export default function PadronForm({ service = "a4" }) {
   const [cuit, setCuit] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
+  const [isProduction, setIsProduction] = useState(false);
+
+  // Solo permitir cambio de entorno para A13
+  const canChangeEnvironment = service === "A13";
+
+  useEffect(() => {
+    if (canChangeEnvironment) {
+      // Inicializar con el entorno actual
+      setIsProduction(getCurrentEnvironment() === "prod");
+    }
+  }, [canChangeEnvironment]);
+
+  const handleEnvironmentChange = (isProd) => {
+    setIsProduction(isProd);
+    setEnvironment(isProd ? "prod" : "homo");
+  };
 
   const handleSearch = async () => {
     if (!cuit) return alert("Ingresá un CUIT");
@@ -24,6 +45,7 @@ export default function PadronForm({ service = "A14" }) {
       setResult({
         error: err.message,
         service: service,
+        environment: getCurrentEnvironment(),
       });
     } finally {
       setLoading(false);
@@ -35,13 +57,15 @@ export default function PadronForm({ service = "A14" }) {
       case "A13":
         return {
           title: "Padrón A13",
-          description: "Consulta básica autorizada",
+          description:
+            "Consulta básica autorizada - " +
+            (isProduction ? "PRODUCCIÓN" : "HOMOLOGACIÓN"),
           placeholder: "CUIT (11 dígitos sin guiones)",
         };
-      case "A14":
+      case "a4":
       default:
         return {
-          title: "Padrón A14",
+          title: "Padrón a4",
           description: "Consulta completa - Solo homologación",
           placeholder: "CUIT (11 dígitos sin guiones)",
         };
@@ -52,6 +76,35 @@ export default function PadronForm({ service = "A14" }) {
 
   return (
     <div>
+      {/* Selector de entorno solo para A13 */}
+      {canChangeEnvironment && (
+        <div className="mb-3">
+          <label className="form-label small">Entorno:</label>
+          <div className="form-check form-switch">
+            <input
+              className="form-check-input"
+              type="checkbox"
+              role="switch"
+              id="environmentSwitch"
+              checked={isProduction}
+              onChange={(e) => handleEnvironmentChange(e.target.checked)}
+            />
+            <label className="form-check-label" htmlFor="environmentSwitch">
+              {isProduction ? (
+                <span className="text-success fw-bold">Producción</span>
+              ) : (
+                <span className="text-warning">Homologación</span>
+              )}
+            </label>
+          </div>
+          <small className="text-muted">
+            {isProduction
+              ? "Consultando datos reales de producción"
+              : "Consultando datos de prueba (homologación)"}
+          </small>
+        </div>
+      )}
+
       <div className="input-group mb-3">
         <input
           type="text"
@@ -81,7 +134,11 @@ export default function PadronForm({ service = "A14" }) {
         <small className="text-muted">{serviceInfo.description}</small>
       </div>
 
-      <ResultViewer result={result} service={service} />
+      <ResultViewer
+        result={result}
+        service={service}
+        environment={getCurrentEnvironment()}
+      />
     </div>
   );
 }

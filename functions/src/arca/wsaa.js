@@ -1,5 +1,5 @@
 /**
- * wsaa.js - Con logs detallados para debug
+ * wsaa.js - ACTUALIZADO CON SECRETOS ESPECÍFICOS POR ENTORNO
  */
 
 import forge from "node-forge";
@@ -11,6 +11,41 @@ import { getCachedToken, setCachedToken } from "./token-cache.js";
 // Constantes para los servicios
 const SERVICE_A4 = "ws_sr_padron_a4";
 const SERVICE_A13 = "ws_sr_padron_a13";
+
+// URLs para WSAA según entorno
+const URL_WSAA = (isProd = false) =>
+  isProd
+    ? "https://wsaa.afip.gov.ar/ws/services/LoginCms"
+    : "https://wsaahomo.afip.gov.ar/ws/services/LoginCms";
+
+// Función para obtener secrets según entorno
+function getSecretsForEnvironment(isProd = false) {
+  if (isProd) {
+    // Usar certificados específicos de producción
+    const cert = process.env["arca-cert-prod"];
+    const key = process.env["arca-key-prod"];
+    const cuit = process.env["arca-cuit-prod"];
+
+    console.log("🔐 [PROD] Usando certificados específicos de producción");
+    console.log(`🔐 [PROD] Certificado: ${cert ? "PRESENTE" : "FALTA"}`);
+    console.log(`🔐 [PROD] Clave: ${key ? "PRESENTE" : "FALTA"}`);
+    console.log(`🔐 [PROD] CUIT: ${cuit ? "PRESENTE" : "FALTA"}`);
+
+    return { cert, key, cuit };
+  } else {
+    // Usar certificados de homologación
+    const cert = process.env.AFIP_CERT;
+    const key = process.env.AFIP_KEY;
+    const cuit = process.env["arca-cuit-prod"];
+
+    console.log("🔐 [HOMO] Usando certificados de homologación");
+    console.log(`🔐 [HOMO] Certificado: ${cert ? "PRESENTE" : "FALTA"}`);
+    console.log(`🔐 [HOMO] Clave: ${key ? "PRESENTE" : "FALTA"}`);
+    console.log(`🔐 [HOMO] CUIT: ${cuit ? "PRESENTE" : "FALTA"}`);
+
+    return { cert, key, cuit };
+  }
+}
 
 // Función para crear agente HTTPS con certificados
 function createHttpsAgent(certPem, keyPem) {
@@ -24,7 +59,6 @@ function createHttpsAgent(certPem, keyPem) {
       console.log(
         `🔐 [DEBUG] Procesando certificado - longitud: ${cert.length}`
       );
-      console.log(`🔐 [DEBUG] Primeros 50 chars: "${cert.substring(0, 50)}"`);
 
       // FORZAR el formateo - siempre agregar saltos de línea
       const base64Content = cert
@@ -35,22 +69,11 @@ function createHttpsAgent(certPem, keyPem) {
       // Reconstruir con formato PEM CORRECTO
       const formatted = `-----BEGIN CERTIFICATE-----\n${base64Content}\n-----END CERTIFICATE-----`;
 
-      console.log("🔐 [DEBUG] Certificado formateado (primeros 120 chars):");
-      console.log(formatted.substring(0, 120));
-      console.log(
-        `🔐 [DEBUG] ¿Tiene salto de línea después de BEGIN? ${formatted.includes(
-          "-----BEGIN CERTIFICATE-----\n"
-        )}`
-      );
       return formatted;
     };
 
     const certFormatted = formatCertificate(certPem);
-    const keyFormatted = keyPem; // La clave ya está bien formateada
-
-    console.log("🔐 [DEBUG] === CERTIFICADO FINAL PARA HTTPS ===");
-    console.log(certFormatted);
-    console.log("🔐 [DEBUG] === FIN CERTIFICADO ===");
+    const keyFormatted = keyPem;
 
     const agent = new https.Agent({
       cert: certFormatted,
@@ -64,7 +87,6 @@ function createHttpsAgent(certPem, keyPem) {
     return agent;
   } catch (error) {
     console.error("❌ Error creando agente HTTPS:", error.message);
-    console.error("🔐 [DEBUG] Stack trace:", error.stack);
     throw new Error(`Error configurando SSL: ${error.message}`);
   }
 }
@@ -72,7 +94,7 @@ function createHttpsAgent(certPem, keyPem) {
 export async function getTokenFromWSAA(service = SERVICE_A4, isProd = false) {
   const MODE = isProd ? "PROD" : "HOMO";
 
-  // Verificar cache primero - clave única por servicio
+  // Verificar cache primero - clave única por servicio y entorno
   const cacheKey = `${service}_${MODE}`;
   const cached = getCachedToken(cacheKey);
   if (cached) {
@@ -87,101 +109,87 @@ export async function getTokenFromWSAA(service = SERVICE_A4, isProd = false) {
       `🔐 [${MODE}] Iniciando autenticación para servicio: ${service}`
     );
 
-    // ✅ CORREGIDO: Limpiar los secrets de \r\n y espacios extra
-    const cert = process.env.AFIP_CERT?.replace(/\r\n/g, "\n").trim();
-    const key = process.env.AFIP_KEY?.replace(/\r\n/g, "\n").trim();
-    const cuit = process.env["arca-cuit-prod"]?.replace(/\r\n/g, "").trim();
+    // ✅ ACTUALIZADO: Obtener secrets específicos por entorno
+    const { cert, key, cuit } = getSecretsForEnvironment(isProd);
+
+    // Limpiar formatos
+    const certClean = cert?.replace(/\r\n/g, "\n").trim();
+    const keyClean = key?.replace(/\r\n/g, "\n").trim();
+    const cuitClean = cuit?.replace(/\r\n/g, "").trim();
 
     console.log(
-      `✅ [${MODE}] Environment variables - Cert: ${cert?.length} chars, Key: ${
-        key?.length
-      } chars, CUIT: ${cuit ? "PRESENTE" : "FALTA"}`
+      `✅ [${MODE}] Secrets cargados - Cert: ${
+        certClean?.length || 0
+      } chars, Key: ${keyClean?.length || 0} chars, CUIT: ${
+        cuitClean ? "PRESENTE" : "FALTA"
+      }`
     );
 
     // DEBUG DETALLADO de certificados
-    console.log("🔍 [DEBUG DETALLADO] === INICIO CERTIFICADO ===");
-    console.log(cert);
-    console.log("🔍 [DEBUG DETALLADO] === FIN CERTIFICADO ===");
+    if (certClean) {
+      console.log(`🔍 [${MODE}] === INICIO CERTIFICADO ===`);
+      console.log(certClean.substring(0, 200) + "...");
+      console.log(`🔍 [${MODE}] === FIN CERTIFICADO ===`);
+    }
 
-    console.log("🔍 [DEBUG DETALLADO] === INICIO CLAVE PRIVADA ===");
-    console.log(key?.substring(0, 500) + "..."); // Solo primeros 500 chars por seguridad
-    console.log("🔍 [DEBUG DETALLADO] === FIN CLAVE PRIVADA ===");
-
-    // Si no tenemos CUIT, lanzar error específico
-    if (!cuit) {
+    // Validaciones críticas
+    if (!cuitClean) {
       throw new Error(
-        "No se pudo cargar el CUIT desde environment variables. Verifica el secreto 'arca-cuit-prod'"
+        `No se pudo cargar el CUIT desde environment variables para ${MODE}`
       );
     }
 
-    // Verificar que los environment variables sean válidos
-    if (!cert || !key) {
+    if (!certClean || !keyClean) {
       throw new Error(
-        "No se pudieron cargar los certificados desde environment variables"
+        `No se pudieron cargar los certificados desde environment variables para ${MODE}. ` +
+          `Certificado: ${certClean ? "PRESENTE" : "FALTA"}, Clave: ${
+            keyClean ? "PRESENTE" : "FALTA"
+          }`
       );
     }
 
-    // Validaciones más estrictas del formato PEM
-    if (!cert.startsWith("-----BEGIN CERTIFICATE-----")) {
-      console.error("❌ [DEBUG] Certificado no empieza con BEGIN CERTIFICATE");
-      console.error("❌ [DEBUG] Primeros 50 chars:", cert.substring(0, 50));
+    // Validaciones de formato PEM
+    if (!certClean.startsWith("-----BEGIN CERTIFICATE-----")) {
       throw new Error(
-        "Formato de certificado incorrecto - debe empezar con '-----BEGIN CERTIFICATE-----'"
+        `Formato de certificado incorrecto para ${MODE} - debe empezar con '-----BEGIN CERTIFICATE-----'`
       );
     }
 
-    if (!cert.endsWith("-----END CERTIFICATE-----")) {
-      console.error("❌ [DEBUG] Certificado no termina con END CERTIFICATE");
-      console.error(
-        "❌ [DEBUG] Últimos 50 chars:",
-        cert.substring(cert.length - 50)
-      );
+    if (!certClean.endsWith("-----END CERTIFICATE-----")) {
       throw new Error(
-        "Formato de certificado incorrecto - debe terminar con '-----END CERTIFICATE-----'"
+        `Formato de certificado incorrecto para ${MODE} - debe terminar con '-----END CERTIFICATE-----'`
       );
     }
 
-    if (!key.startsWith("-----BEGIN") || !key.includes("PRIVATE KEY-----")) {
-      console.error("❌ [DEBUG] Formato de clave privada incorrecto");
-      console.error(
-        "❌ [DEBUG] Primeros 50 chars de clave:",
-        key.substring(0, 50)
-      );
-      throw new Error("Formato de clave privada incorrecto");
+    if (
+      !keyClean.startsWith("-----BEGIN") ||
+      !keyClean.includes("PRIVATE KEY-----")
+    ) {
+      throw new Error(`Formato de clave privada incorrecto para ${MODE}`);
     }
 
     console.log(`🔑 [${MODE}] Generando TRA para servicio: ${service}`);
     const tra = generarTRA(service);
-    console.log("🔍 [DEBUG] TRA generado:", tra);
 
     console.log(`✍️ [${MODE}] Firmando CMS...`);
-    const cms = firmarTRA(tra, cert, key);
-    console.log(
-      `🔍 [DEBUG] CMS generado (primeros 100 chars): ${cms.substring(
-        0,
-        100
-      )}...`
+    const cms = firmarTRA(tra, certClean, keyClean);
+
+    const wsaaUrl = URL_WSAA(isProd);
+    console.log(`🚀 [${MODE}] Enviando a WSAA: ${wsaaUrl}`);
+    const wsaaResponse = await enviarWSAA(
+      cms,
+      wsaaUrl,
+      certClean,
+      keyClean,
+      MODE
     );
-
-    const WSAA_URL = isProd
-      ? "https://wsaa.afip.gov.ar/ws/services/LoginCms"
-      : "https://wsaahomo.afip.gov.ar/ws/services/LoginCms";
-
-    console.log(`🚀 [${MODE}] Enviando a WSAA: ${WSAA_URL}`);
-    const wsaaResponse = await enviarWSAA(cms, WSAA_URL, cert, key);
 
     console.log("🔍 [DEBUG] Respuesta WSAA recibida");
     const loginCmsReturnXml = extraerLoginCmsReturn(wsaaResponse);
-    console.log(
-      "🔍 [DEBUG] loginCmsReturn extraído (primeros 200 chars):",
-      loginCmsReturnXml.substring(0, 200)
-    );
 
     const parsed = await parseStringPromise(loginCmsReturnXml, {
       explicitArray: false,
     });
-
-    console.log("🔍 [DEBUG] XML parseado:", JSON.stringify(parsed, null, 2));
 
     const credentials = parsed.loginTicketResponse?.credentials;
     const header = parsed.loginTicketResponse?.header;
@@ -196,11 +204,12 @@ export async function getTokenFromWSAA(service = SERVICE_A4, isProd = false) {
       token: credentials.token,
       sign: credentials.sign,
       expiration,
-      cuitRepresentada: cuit,
+      cuitRepresentada: cuitClean,
       service: service,
+      environment: MODE,
     };
 
-    // Guardar en cache con clave específica del servicio
+    // Guardar en cache con clave específica del servicio y entorno
     setCachedToken(tokenData, cacheKey);
 
     console.log(`✅ [${MODE}] Token generado exitosamente para ${service}`);
@@ -212,7 +221,6 @@ export async function getTokenFromWSAA(service = SERVICE_A4, isProd = false) {
       `❌ [${MODE}] Error en getTokenFromWSAA para ${service}:`,
       error.message
     );
-    console.error("🔍 [DEBUG] Stack trace:", error.stack);
 
     // Limpiar cache en caso de error de autenticación
     if (
@@ -301,7 +309,7 @@ function firmarTRA(tra, certPem, keyPem) {
   }
 }
 
-async function enviarWSAA(cmsBase64, wsaaUrl, certPem, keyPem) {
+async function enviarWSAA(cmsBase64, wsaaUrl, certPem, keyPem, mode = "HOMO") {
   const soapBody = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
                   xmlns:wsaa="http://wsaa.view.sua.dvadac.afip.gov.ar/">
@@ -314,16 +322,8 @@ async function enviarWSAA(cmsBase64, wsaaUrl, certPem, keyPem) {
 </soapenv:Envelope>`;
 
   try {
-    console.log("🌐 [WSAA] Preparando solicitud a WSAA...");
-    console.log("🔍 [DEBUG WSAA] URL:", wsaaUrl);
-    console.log(
-      "🔍 [DEBUG WSAA] CMS (primeros 200 chars):",
-      cmsBase64.substring(0, 200)
-    );
-    console.log(
-      "🔍 [DEBUG WSAA] SOAP Body (primeros 500 chars):",
-      soapBody.substring(0, 500)
-    );
+    console.log(`🌐 [WSAA ${mode}] Preparando solicitud a WSAA...`);
+    console.log(`🔍 [DEBUG WSAA ${mode}] URL: ${wsaaUrl}`);
 
     // Crear agente HTTPS con certificados
     const httpsAgent = createHttpsAgent(certPem, keyPem);
@@ -338,23 +338,21 @@ async function enviarWSAA(cmsBase64, wsaaUrl, certPem, keyPem) {
     });
 
     console.log(
-      `✅ [WSAA] Respuesta recibida de WSAA - Status: ${response.status}`
-    );
-    console.log(
-      "🔍 [DEBUG WSAA] Respuesta (primeros 500 chars):",
-      response.data.substring(0, 500)
+      `✅ [WSAA ${mode}] Respuesta recibida de WSAA - Status: ${response.status}`
     );
     return response.data;
   } catch (error) {
-    console.error("❌ [WSAA] Error en enviarWSAA:", error.message);
+    console.error(`❌ [WSAA ${mode}] Error en enviarWSAA:`, error.message);
 
     if (error.code) {
-      console.error(`❌ [WSAA] Error code: ${error.code}`);
+      console.error(`❌ [WSAA ${mode}] Error code: ${error.code}`);
     }
 
     if (error.response) {
-      console.error(`❌ [WSAA] Response status: ${error.response.status}`);
-      console.error(`❌ [WSAA] Response data: ${error.response.data}`);
+      console.error(
+        `❌ [WSAA ${mode}] Response status: ${error.response.status}`
+      );
+      console.error(`❌ [WSAA ${mode}] Response data: ${error.response.data}`);
     }
 
     if (error.response?.data?.includes("alreadyAuthenticated")) {
@@ -377,12 +375,17 @@ async function enviarWSAA(cmsBase64, wsaaUrl, certPem, keyPem) {
           "AFIP: Servicio no autorizado - Verifique los permisos del certificado"
         );
       }
+      if (errorData.includes("Certificate")) {
+        throw new Error(
+          "AFIP: Error de certificado - Verifique que el certificado sea válido para este entorno"
+        );
+      }
     }
 
     const msg = error.response
       ? `HTTP ${error.response.status}: ${error.response.statusText}`
       : error.message;
-    throw new Error("Error al enviar solicitud al WSAA: " + msg);
+    throw new Error(`Error al enviar solicitud al WSAA (${mode}): ` + msg);
   }
 }
 
@@ -395,7 +398,6 @@ function extraerLoginCmsReturn(wsaaResponseXml) {
 
   if (!match) {
     console.error("❌ No se encontró <loginCmsReturn> en respuesta WSAA");
-    console.error("🔍 [DEBUG] Respuesta completa:", wsaaResponseXml);
     throw new Error("No se encontró <loginCmsReturn> en respuesta WSAA");
   }
 
@@ -431,4 +433,4 @@ export async function getTokenForService(service, isProd = false) {
 }
 
 // Exportar constantes de servicios
-export { SERVICE_A4, SERVICE_A13 };
+export { SERVICE_A4, SERVICE_A13, URL_WSAA };
